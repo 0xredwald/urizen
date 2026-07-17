@@ -79,6 +79,18 @@ export function SiteNav() {
 
         <div className="flex items-center gap-2 sm:gap-3">
           <Link
+            href="https://t.me/urizenalpha"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Urizen daily report on Telegram"
+            className="group inline-flex shrink-0 items-center gap-2 border border-[#229ED9]/45 bg-[#229ED9]/10 px-2.5 py-2.5 font-mono text-[0.8rem] uppercase tracking-[0.1em] text-[#2AABEE] transition-colors hover:bg-[#229ED9]/20 sm:px-3.5"
+          >
+            <svg viewBox="0 0 24 24" className="size-4 shrink-0" fill="currentColor" aria-hidden>
+              <path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71l-4.13-3.05-1.98 1.93c-.23.23-.42.42-.83.42z" />
+            </svg>
+            <span className="hidden sm:inline">Daily report</span>
+          </Link>
+          <Link
             href="https://x.com/urizenfund"
             target="_blank"
             rel="noopener noreferrer"
