@@ -12,6 +12,7 @@ const LINKS: NavItem[] = [
   { label: "Fund", children: [{ label: "The fund", href: "/fund" }, { label: "$URI token", href: "/token" }] },
   { label: "Skill", href: "/skill" },
   { label: "Docs", href: "/docs" },
+  { label: "x402", href: "/x402" },
 ];
 
 export function SiteNav() {
