@@ -30,12 +30,17 @@ const MODEL_FALLBACK: Record<string, string> = { anthropic: "claude-sonnet-5", o
 
 function systemPrompt(ctx: HorizonCtx): string {
   return [
-    "You are Horizon, an equity analyst operating a Bloomberg-style trading terminal. You don't just talk — you OPERATE the terminal through tools, and the user watches your cursor draw.",
+    "You are the terminal's analyst agent. You don't just talk — you OPERATE a Bloomberg-style trading terminal through tools, and the user watches your cursor draw.",
     "Reason over the REAL candles and indicators given. NEVER invent prices, timestamps, or stats. This is not investment advice.",
     "",
-    "Respond with ONLY minified JSON (no markdown fences):",
-    `{"say": string (1-3 crisp sentences, lowercase-ok, what you see + what you're doing), "actions": HAction[]}`,
-    "HAction is one of:",
+    "FORMAT — reply in natural prose: a crisp 1-3 sentence read (lowercase-ok). This STREAMS live to the user, so write it first.",
+    "If (and only if) you need to act on the terminal, AFTER your prose append a fenced block, exactly:",
+    "```actions",
+    `[{"tool":"drawTrendline","from":{"t":<unix_sec>,"price":<n>},"to":{"t":<unix_sec>,"price":<n>},"label":"uptrend"}]`,
+    "```",
+    "Put NOTHING after the closing fence. Omit the whole block when no action is needed.",
+    "An @source in the user message (@news @sec @macro @market @ratings @onchain @polymarket) = consult that data — checkNews and/or openPanel the matching panel.",
+    "Each HAction in the array is one of:",
     `{"tool":"selectSymbol","symbol":"TSLA"} (retarget the active chart) · {"tool":"openChart","symbol":"TSLA"} (open a NEW chart, up to 4 — a playground) · {"tool":"setTimeframe","range":"1m|3m|6m|1y"}`,
     `{"tool":"addIndicator","name":"MA|EMA|BOLL|RSI|MACD|KDJ|VOL"} · {"tool":"clearIndicators"}`,
     `{"tool":"drawTrendline","from":{"t":<unix_sec>,"price":<n>},"to":{"t":<unix_sec>,"price":<n>},"label":"uptrend"}`,
@@ -73,11 +78,15 @@ function grounding(ctx: HorizonCtx, userText: string): string {
   ].join("\n");
 }
 
-async function readSSE(res: Response): Promise<string> {
+export type HorizonOpts = { onStatus?: (s: string) => void; onText?: (visible: string) => void };
+
+// stream an SSE body, calling onDelta with each text delta. Handles both OpenAI-style
+// (choices[].delta.content) and Anthropic-style (content_block_delta.delta.text).
+async function streamSSE(res: Response, onDelta: (d: string) => void): Promise<void> {
   const reader = res.body?.getReader();
-  if (!reader) return "";
+  if (!reader) return;
   const dec = new TextDecoder();
-  let buf = "", out = "";
+  let buf = "";
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -88,63 +97,73 @@ async function readSSE(res: Response): Promise<string> {
       const t = line.trim();
       if (!t.startsWith("data:")) continue;
       const data = t.slice(5).trim();
-      if (data === "[DONE]") continue;
-      try { out += JSON.parse(data)?.choices?.[0]?.delta?.content || ""; } catch { /* skip */ }
+      if (data === "[DONE]" || !data) continue;
+      try {
+        const j = JSON.parse(data);
+        const d = j?.choices?.[0]?.delta?.content ?? (j?.type === "content_block_delta" ? j?.delta?.text : "") ?? "";
+        if (d) onDelta(d);
+      } catch { /* skip keep-alive / partial */ }
     }
   }
-  return out;
 }
 
-export async function runHorizon(userText: string, ctx: HorizonCtx, history: HMsg[]): Promise<HorizonReply> {
+export async function runHorizon(userText: string, ctx: HorizonCtx, history: HMsg[], opts: HorizonOpts = {}): Promise<HorizonReply> {
   const binding = getActiveBinding();
   if (!binding) throw new Error("no model available");
   const system = systemPrompt(ctx);
   const prior = history.slice(-6).map((m) => ({ role: m.role, content: m.content }));
   const user = grounding(ctx, userText);
-  let raw = "";
+  opts.onStatus?.("reading the tape…");
+  let raw = "", started = false;
+  const onDelta = (d: string) => {
+    raw += d;
+    if (!started) { started = true; opts.onStatus?.(""); }
+    const fi = raw.indexOf("```"); // the visible reply is everything before the actions fence
+    opts.onText?.((fi >= 0 ? raw.slice(0, fi) : raw).trim());
+  };
 
   if (binding.free || !binding.key) {
-    // Free Mode → same-origin server proxy (streams SSE)
     const res = await fetch("/api/alpha/free", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: binding.model || FREE_MODEL, max_tokens: 1200, messages: [{ role: "system", content: system }, ...prior, { role: "user", content: user }] }),
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: binding.model || FREE_MODEL, max_tokens: 1200, stream: true, messages: [{ role: "system", content: system }, ...prior, { role: "user", content: user }] }),
     });
     if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e?.error || `free mode ${res.status}`); }
-    raw = await readSSE(res);
+    await streamSSE(res, onDelta);
   } else if (binding.provider === "anthropic") {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-api-key": binding.key.trim(), "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
-      body: JSON.stringify({ model: binding.model || MODEL_FALLBACK.anthropic, max_tokens: 1200, system, messages: [...prior, { role: "user", content: user }] }),
+      method: "POST", headers: { "content-type": "application/json", "x-api-key": binding.key.trim(), "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+      body: JSON.stringify({ model: binding.model || MODEL_FALLBACK.anthropic, max_tokens: 1200, stream: true, system, messages: [...prior, { role: "user", content: user }] }),
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data?.error?.message || `anthropic ${res.status}`);
-    raw = data.content?.map((b: { text?: string }) => b.text || "").join("") ?? "";
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e?.error?.message || `anthropic ${res.status}`); }
+    await streamSSE(res, onDelta);
   } else {
     const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${binding.key.trim()}`, "http-referer": "https://urizenfund.com", "x-title": "URIZEN Terminal · Horizon" },
-      body: JSON.stringify({ model: binding.model || MODEL_FALLBACK.openrouter, max_tokens: 1200, messages: [{ role: "system", content: system }, ...prior, { role: "user", content: user }] }),
+      method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${binding.key.trim()}`, "http-referer": "https://urizenfund.com", "x-title": "URIZEN Terminal · Agent" },
+      body: JSON.stringify({ model: binding.model || MODEL_FALLBACK.openrouter, max_tokens: 1200, stream: true, messages: [{ role: "system", content: system }, ...prior, { role: "user", content: user }] }),
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data?.error?.message || `openrouter ${res.status}`);
-    raw = data.choices?.[0]?.message?.content ?? "";
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e?.error?.message || `openrouter ${res.status}`); }
+    await streamSSE(res, onDelta);
   }
-
   return parse(raw);
 }
 
+// prose + ```actions [ … ] ``` (with a legacy {say,actions} JSON fallback)
 function parse(text: string): HorizonReply {
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const body = fenced ? fenced[1] : text;
-  const s = body.indexOf("{"), e = body.lastIndexOf("}");
-  if (s === -1 || e === -1) return { say: text.trim() || "…", actions: [] };
-  try {
-    const obj = JSON.parse(body.slice(s, e + 1));
-    const actions = Array.isArray(obj.actions) ? obj.actions.filter((a: HAction) => a && typeof a.tool === "string") : [];
-    return { say: String(obj.say ?? text.trim() ?? "").slice(0, 600), actions };
-  } catch {
-    return { say: text.trim().slice(0, 600) || "…", actions: [] };
+  const fence = text.match(/```(?:actions|json)?\s*([\s\S]*?)```/i);
+  const say = (fence ? text.slice(0, text.indexOf(fence[0])) : text).trim().slice(0, 900);
+  let actions: HAction[] = [];
+  const grab = (body: string) => {
+    const s = body.indexOf("["), e = body.lastIndexOf("]");
+    if (s >= 0 && e > s) { try { const arr = JSON.parse(body.slice(s, e + 1)); if (Array.isArray(arr)) return arr.filter((a) => a && typeof a.tool === "string") as HAction[]; } catch { /* */ } }
+    const os = body.indexOf("{"), oe = body.lastIndexOf("}");
+    if (os >= 0 && oe > os) { try { const obj = JSON.parse(body.slice(os, oe + 1)); if (Array.isArray(obj.actions)) return obj.actions.filter((a: HAction) => a && typeof a.tool === "string") as HAction[]; } catch { /* */ } }
+    return [] as HAction[];
+  };
+  if (fence) actions = grab(fence[1]);
+  else {
+    // whole reply might be legacy {say, actions}
+    const os = text.indexOf("{"), oe = text.lastIndexOf("}");
+    if (os >= 0 && oe > os) { try { const obj = JSON.parse(text.slice(os, oe + 1)); if (obj.say || obj.actions) return { say: String(obj.say ?? say).slice(0, 900), actions: Array.isArray(obj.actions) ? obj.actions.filter((a: HAction) => a?.tool) : [] }; } catch { /* */ } }
   }
+  return { say: say || "…", actions };
 }

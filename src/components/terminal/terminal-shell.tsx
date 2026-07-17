@@ -16,6 +16,7 @@ import { runHorizon, type HAction, type HMsg } from "@/lib/horizon";
 import { unlockVault } from "@/lib/agents";
 import { matchSlash, resolveSlashCommand, SlashMenu, SkillsModal } from "@/components/alpha/skills-panel";
 import { ALL_SKILL_IDS } from "@/components/alpha/skills";
+import { matchAt, type Source } from "@/components/alpha/sources";
 import type { Candle } from "@/lib/quant";
 
 // ── Horizon Terminal — P1 shell ──────────────────────────────────────────────
@@ -216,12 +217,18 @@ export function TerminalShell() {
       } finally { setBusy(false); setStatus(""); cursorRef.current?.hide(); }
       return;
     }
+    const history = [...messages, userMsg];
+    setMessages((m) => [...m, { role: "assistant", content: "" }]); // the bubble we stream into
+    const patchLast = (content: string) => setMessages((m) => { const c = [...m]; for (let i = c.length - 1; i >= 0; i--) { if (c[i].role === "assistant") { c[i] = { ...c[i], content }; break; } } return c; });
     try {
-      const reply = await runHorizon(t, { symbol: selected, range, candles, indicators: null, universe: STOCKS.map((s) => s.symbol) }, [...messages, userMsg]);
-      if (reply.say) setMessages((m) => [...m, { role: "assistant", content: reply.say }]);
+      const reply = await runHorizon(t, { symbol: selected, range, candles, indicators: null, universe: STOCKS.map((s) => s.symbol) }, history, {
+        onStatus: (s) => setStatus(s),
+        onText: (visible) => { if (visible) patchLast(visible); },
+      });
+      patchLast(reply.say || "…");
       await dispatch(reply.actions);
     } catch (e) {
-      setMessages((m) => [...m, { role: "assistant", content: `hit a snag — ${(e as Error)?.message || "try again"}` }]);
+      patchLast(`hit a snag — ${(e as Error)?.message || "try again"}`);
     } finally { setBusy(false); setStatus(""); cursorRef.current?.hide(); }
   };
 
@@ -293,14 +300,14 @@ export function TerminalShell() {
       )}
 
       {/* ── top bar ── */}
-      <header className="relative z-10 flex h-[52px] shrink-0 items-center gap-4 border-b border-border bg-[#0a0a0b]/80 px-4 backdrop-blur-md">
+      <header className="relative z-40 flex h-[52px] shrink-0 items-center gap-4 border-b border-border bg-[#0a0a0b]/80 px-4 backdrop-blur-md">
         <a href="/" className="flex items-center gap-2">
           <span className="grid h-7 w-7 place-items-center rounded-[5px] bg-signal/15"><UrizenMark className="h-3.5 w-auto text-signal" /></span>
           <span className="font-display text-[15px] font-bold tracking-tight">Terminal</span>
           <span className="hidden rounded-full border border-white/15 px-2 py-0.5 font-mono text-[0.58rem] uppercase tracking-[0.18em] text-muted-foreground sm:inline">URIZEN</span>
         </a>
         <div className="relative hidden max-w-md flex-1 items-center sm:flex">
-          <SymbolSearch onPick={setSelected} />
+          <SymbolSearch onPick={setSelected} quotes={quotes} />
         </div>
         <div className="ml-auto flex items-center gap-4">
           <MarketClock />
@@ -481,6 +488,7 @@ function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrade, ta
   const [enabled, setEnabled] = useState<string[]>(ALL_SKILL_IDS);
   const [showSkills, setShowSkills] = useState(false);
   const [slashIdx, setSlashIdx] = useState(0);
+  const [atIdx, setAtIdx] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const examples = [
     `analyse ${selected} and draw the trend`,
@@ -492,9 +500,11 @@ function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrade, ta
   const persistSkills = (ids: string[]) => { setEnabled(ids); try { localStorage.setItem("urizen.skills.v1", JSON.stringify(ids)); } catch { /* noop */ } };
   const toggleSkill = (id: string) => persistSkills(enabled.includes(id) ? enabled.filter((x) => x !== id) : [...enabled, id]);
   const slashItems = matchSlash(input);
+  const atItems = slashItems.length ? [] : matchAt(input); // "@" mentions scope which data to consult
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }); }, [messages, status]);
   const pickSkill = (s: { command: string }) => { setInput(s.command + " "); setSlashIdx(0); };
-  const send = () => { const raw = input; setInput(""); setSlashIdx(0); const r = resolveSlashCommand(raw); onAsk(r ? r.skill.prompt(r.arg) : raw); };
+  const pickSource = (s: Source) => { setInput((prev) => prev.replace(/@\w*$/, s.command + " ")); setAtIdx(0); };
+  const send = () => { const raw = input; setInput(""); setSlashIdx(0); setAtIdx(0); const r = resolveSlashCommand(raw); onAsk(r ? r.skill.prompt(r.arg) : raw); };
 
   return (
     <Pane n={7} title="Agent" right={
@@ -523,22 +533,27 @@ function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrade, ta
             </div>
           </div>
         )}
-        {messages.map((m, i) => m.role === "user" ? (
-          <div key={i} className="flex justify-end">
-            <div className="max-w-[85%] whitespace-pre-wrap rounded-xl rounded-tr-sm border border-signal/25 bg-signal/10 px-3 py-2 text-[0.82rem] leading-relaxed text-foreground">{m.content}</div>
-          </div>
-        ) : (
-          <div key={i} className="flex items-start gap-2.5">
-            <span className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full border border-signal/40 bg-signal/10"><UrizenMark className="h-3.5 w-auto text-signal" /></span>
-            <div className="max-w-[88%] space-y-0.5 rounded-xl rounded-tl-sm border border-border bg-white/[0.03] px-3 py-2 text-[0.82rem] leading-relaxed text-foreground/90">{renderMd(m.content)}</div>
-          </div>
-        ))}
-        {busy && status && (
-          <div className="flex items-center gap-2.5 pl-9 font-mono text-[0.72rem] text-signal">
-            <span className="inline-flex gap-1"><span className="h-1 w-1 animate-bounce rounded-full bg-signal [animation-delay:-0.2s]" /><span className="h-1 w-1 animate-bounce rounded-full bg-signal [animation-delay:-0.1s]" /><span className="h-1 w-1 animate-bounce rounded-full bg-signal" /></span>
-            {status}
-          </div>
-        )}
+        {messages.map((m, i) => {
+          const isLast = i === messages.length - 1;
+          const streaming = busy && isLast && m.role === "assistant";
+          if (m.role === "user") return (
+            <div key={i} className="flex justify-end">
+              <div className="max-w-[85%] whitespace-pre-wrap rounded-xl rounded-tr-sm border border-signal/25 bg-signal/10 px-3 py-2 text-[0.82rem] leading-relaxed text-foreground">{m.content}</div>
+            </div>
+          );
+          return (
+            <div key={i} className="flex items-start gap-2.5">
+              <span className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full border border-signal/40 bg-signal/10"><UrizenMark className="h-3.5 w-auto text-signal" /></span>
+              <div className="max-w-[88%] space-y-0.5 rounded-xl rounded-tl-sm border border-border bg-white/[0.03] px-3 py-2 text-[0.82rem] leading-relaxed text-foreground/90">
+                {m.content
+                  ? <>{renderMd(m.content)}{streaming && <span className="ml-0.5 inline-block h-3.5 w-[2px] translate-y-0.5 animate-pulse bg-signal align-middle" />}</>
+                  : streaming
+                    ? <span className="flex items-center gap-2 font-mono text-[0.72rem] text-signal"><span className="inline-flex gap-1"><span className="h-1 w-1 animate-bounce rounded-full bg-signal [animation-delay:-0.2s]" /><span className="h-1 w-1 animate-bounce rounded-full bg-signal [animation-delay:-0.1s]" /><span className="h-1 w-1 animate-bounce rounded-full bg-signal" /></span>{status || "thinking…"}</span>
+                    : "…"}
+              </div>
+            </div>
+          );
+        })}
       </div>
       {pendingTrade && (
         <div className="shrink-0 border-t border-border p-3 pb-0">
@@ -546,7 +561,8 @@ function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrade, ta
         </div>
       )}
       <div className="relative shrink-0 border-t border-border p-3">
-        {slashItems.length > 0 && <SlashMenu items={slashItems} active={slashIdx} onPick={pickSkill} title="Skills" />}
+        {slashItems.length > 0 && <SlashMenu items={slashItems} active={slashIdx} onPick={pickSkill} title="Skills · / to run" />}
+        {atItems.length > 0 && <SlashMenu items={atItems} active={atIdx} onPick={pickSource} title="Sources · @ to scope data" />}
         <div className="flex items-end gap-2 rounded-xl border border-border bg-[#0d0d10] p-1.5 focus-within:border-signal/40">
           <textarea value={input} onChange={(e) => setInput(e.target.value)} rows={1} disabled={busy}
             onKeyDown={(e) => {
@@ -556,9 +572,15 @@ function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrade, ta
                 if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) { e.preventDefault(); pickSkill(slashItems[slashIdx]); return; }
                 if (e.key === "Escape") { setInput(""); return; }
               }
+              if (atItems.length > 0) {
+                if (e.key === "ArrowDown") { e.preventDefault(); setAtIdx((i) => Math.min(i + 1, atItems.length - 1)); return; }
+                if (e.key === "ArrowUp") { e.preventDefault(); setAtIdx((i) => Math.max(i - 1, 0)); return; }
+                if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) { e.preventDefault(); pickSource(atItems[atIdx]); return; }
+                if (e.key === "Escape") { setInput(""); return; }
+              }
               if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
             }}
-            placeholder={busy ? "working…" : `ask the agent, or type / for skills…`}
+            placeholder={busy ? "working…" : `ask · / skills · @ sources`}
             className="max-h-24 min-h-[2rem] flex-1 resize-none bg-transparent px-2 py-1.5 text-[0.82rem] outline-none placeholder:text-muted-foreground/50 disabled:opacity-50" />
           <button onClick={send} disabled={busy || !input.trim()} className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-signal/15 text-signal transition-colors hover:bg-signal/25 disabled:opacity-40">
             <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor"><path d="M3 11l18-8-8 18-2-7-8-3z" /></svg>
@@ -576,37 +598,54 @@ function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrade, ta
   );
 }
 
-// ── symbol search (client-side over the universe) ──
-function SymbolSearch({ onPick }: { onPick: (s: string) => void }) {
+// ── symbol search — live autocomplete over the universe (keyboard-navigable) ──
+function SymbolSearch({ onPick, quotes }: { onPick: (s: string) => void; quotes: Record<string, { price: number; changePct: number }> }) {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
+  const [idx, setIdx] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
   const results = useMemo(() => {
     const t = q.trim().toUpperCase();
-    if (!t) return [];
-    return STOCKS.filter((s) => s.symbol.includes(t) || s.name.toUpperCase().includes(t)).slice(0, 7);
+    const base = t ? STOCKS.filter((s) => s.symbol.includes(t) || s.name.toUpperCase().includes(t)) : STOCKS;
+    return base.slice(0, 8);
   }, [q]);
+  useEffect(() => { setIdx(0); }, [q]);
   useEffect(() => {
     const onDoc = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
     document.addEventListener("mousedown", onDoc); return () => document.removeEventListener("mousedown", onDoc);
   }, []);
+  const choose = (sym: string) => { onPick(sym); setQ(""); setOpen(false); };
   return (
     <div ref={ref} className="relative w-full">
-      <div className="flex items-center gap-2 rounded-lg border border-border bg-[#0d0d10] px-3 py-1.5">
+      <div className="flex items-center gap-2 rounded-lg border border-border bg-[#0d0d10] px-3 py-1.5 focus-within:border-signal/40">
         <span className="text-muted-foreground/60">⌕</span>
-        <input value={q} onChange={(e) => { setQ(e.target.value); setOpen(true); }} onFocus={() => setOpen(true)} placeholder="Search ticker or company…"
+        <input value={q} onChange={(e) => { setQ(e.target.value); setOpen(true); }} onFocus={() => setOpen(true)}
+          onKeyDown={(e) => {
+            if (!open || !results.length) return;
+            if (e.key === "ArrowDown") { e.preventDefault(); setIdx((i) => Math.min(i + 1, results.length - 1)); }
+            else if (e.key === "ArrowUp") { e.preventDefault(); setIdx((i) => Math.max(i - 1, 0)); }
+            else if (e.key === "Enter") { e.preventDefault(); choose(results[idx].symbol); }
+            else if (e.key === "Escape") { setOpen(false); }
+          }}
+          placeholder="Search ticker or company…"
           className="w-full bg-transparent text-[0.82rem] outline-none placeholder:text-muted-foreground/50" />
         <kbd className="rounded border border-border px-1.5 font-mono text-[0.6rem] text-muted-foreground">/</kbd>
       </div>
-      {open && results.length > 0 && (
-        <div className="absolute left-0 top-full z-50 mt-1 w-full overflow-hidden rounded-lg border border-border bg-[#0d0d10] shadow-xl">
-          {results.map((s) => (
-            <button key={s.symbol} onClick={() => { onPick(s.symbol); setQ(""); setOpen(false); }} className="flex w-full items-center gap-2.5 px-3 py-2 text-left hover:bg-signal/10">
-              <Logo s={s.symbol} size={18} />
-              <span className="font-mono text-[0.8rem] text-foreground">{s.symbol}</span>
-              <span className="truncate text-[0.75rem] text-muted-foreground">{s.name}</span>
+      {open && (
+        <div className="absolute left-0 top-full z-50 mt-1.5 w-full overflow-hidden rounded-xl border border-border bg-[#0d0d10] p-1 shadow-2xl">
+          <div className="px-2.5 py-1 font-mono text-[0.55rem] uppercase tracking-widest text-muted-foreground/50">{q.trim() ? `${results.length} match${results.length === 1 ? "" : "es"}` : "markets"}</div>
+          {results.length === 0 ? (
+            <div className="px-2.5 py-3 text-center text-[0.76rem] text-muted-foreground/60">no match for “{q.trim()}”</div>
+          ) : results.map((s, i) => { const qt = quotes[s.symbol]; return (
+            <button key={s.symbol} onMouseEnter={() => setIdx(i)} onClick={() => choose(s.symbol)}
+              className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left transition-colors ${i === idx ? "bg-signal/10" : "hover:bg-white/[0.04]"}`}>
+              <Logo s={s.symbol} size={20} />
+              <span className="w-14 shrink-0 font-mono text-[0.8rem] text-foreground">{s.symbol}</span>
+              <span className="min-w-0 flex-1 truncate text-[0.75rem] text-muted-foreground">{s.name}</span>
+              {qt && <span className="font-mono text-[0.72rem] tabular-nums text-foreground/70">{fmt(qt.price)}</span>}
+              {qt && <span className={`w-16 shrink-0 text-right font-mono text-[0.7rem] tabular-nums ${qt.changePct >= 0 ? "text-signal" : "text-[#ff5a5a]"}`}>{pct(qt.changePct)}</span>}
             </button>
-          ))}
+          ); })}
         </div>
       )}
     </div>
