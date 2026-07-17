@@ -7,10 +7,9 @@ import { type ChartHandle } from "@/components/terminal/kline-chart";
 import { HorizonCursor, type CursorHandle } from "@/components/terminal/horizon-cursor";
 import { TradeTicket, type ProposedTrade } from "@/components/terminal/trade-ticket";
 import { ChartWorkspace } from "@/components/terminal/chart-workspace";
-import { KeyModal } from "@/components/terminal/key-modal";
+import { KeyModal, InlineKeySetup } from "@/components/terminal/key-modal";
 import { NewsPanel, RatingsPanel, FundamentalsPanel, MacroPanel, PredictionsPanel, OnchainPanel } from "@/components/terminal/data-panels";
-import { TVNews, TVEconCalendar, TVTickerTape, TVHotlists, TVHeatmap } from "@/components/terminal/tv-widgets";
-import { AncientOfDays } from "@/components/quant/ancient-of-days";
+import { TVEconCalendar, TVHeatmap } from "@/components/terminal/tv-widgets";
 import { UrizenMark } from "@/components/brand/marks";
 import { STOCKS } from "@/lib/stocks";
 import { runHorizon, type HAction, type HMsg } from "@/lib/horizon";
@@ -34,12 +33,10 @@ const pct = (n: number) => `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
 
 // the panels the user (and the agent) can add/close in the centre workspace
 const ALL_PANELS: { id: string; title: string }[] = [
-  { id: "news", title: "News" }, { id: "calendar", title: "Economic calendar" },
-  { id: "hotlists", title: "Hotlists" }, { id: "heatmap", title: "Heatmap" },
-  { id: "gainers", title: "Top gainers" }, { id: "losers", title: "Top losers" },
-  { id: "headlines", title: "Headlines" }, { id: "ratings", title: "Analyst ratings" },
-  { id: "fundamentals", title: "Fundamentals" }, { id: "macro", title: "Macro" },
-  { id: "predictions", title: "Prediction markets" }, { id: "onchain", title: "On-chain" },
+  { id: "news", title: "News" }, { id: "gainers", title: "Top gainers" }, { id: "losers", title: "Top losers" },
+  { id: "ratings", title: "Analyst ratings" }, { id: "fundamentals", title: "Fundamentals" },
+  { id: "macro", title: "Macro" }, { id: "predictions", title: "Prediction markets" }, { id: "onchain", title: "On-chain" },
+  { id: "calendar", title: "Economic calendar" }, { id: "heatmap", title: "Heatmap" },
 ];
 
 function Logo({ s, size = 18 }: { s: string; size?: number }) {
@@ -50,7 +47,7 @@ function Logo({ s, size = 18 }: { s: string; size?: number }) {
 }
 
 // A titled, numbered pane — the Bloomberg tell.
-function Pane({ n, title, right, children, className = "", bodyClass = "", onClose }: { n?: number; title: string; right?: React.ReactNode; children: React.ReactNode; className?: string; bodyClass?: string; onClose?: () => void }) {
+function Pane({ n, title, right, children, className = "", bodyClass = "", onClose, onExpand }: { n?: number; title: string; right?: React.ReactNode; children: React.ReactNode; className?: string; bodyClass?: string; onClose?: () => void; onExpand?: () => void }) {
   return (
     <section className={`flex min-h-0 flex-col overflow-hidden border border-border bg-[#0b0b0d]/62 backdrop-blur-md ${className}`}>
       <header className="flex h-8 shrink-0 items-center justify-between border-b border-border px-3">
@@ -60,6 +57,7 @@ function Pane({ n, title, right, children, className = "", bodyClass = "", onClo
         </div>
         <div className="flex items-center gap-2">
           {right}
+          {onExpand && <button onClick={onExpand} title="expand" className="font-mono text-[0.8rem] leading-none text-muted-foreground/50 transition-colors hover:text-signal">⤢</button>}
           {onClose && <button onClick={onClose} title="close panel" className="font-mono text-[0.85rem] leading-none text-muted-foreground/50 transition-colors hover:text-[#ff5a5a]">×</button>}
         </div>
       </header>
@@ -88,7 +86,8 @@ export function TerminalShell() {
   const [status, setStatus] = useState("");
   const [pendingTrade, setPendingTrade] = useState<ProposedTrade | null>(null);
   const [keyOpen, setKeyOpen] = useState(false);
-  const [panels, setPanels] = useState<string[]>(["gainers", "losers", "news"]);
+  const [panels, setPanels] = useState<string[]>(["news", "gainers", "losers"]);
+  const [expanded, setExpanded] = useState<string | null>(null);
   const { address } = useAccount();
 
   useEffect(() => { try { const s = localStorage.getItem("urizen.terminal.panels"); if (s) setPanels(JSON.parse(s)); } catch { /* noop */ } }, []);
@@ -99,11 +98,9 @@ export function TerminalShell() {
     switch (id) {
       case "gainers": return <MoversBody rows={gainers} onPick={setSelected} up />;
       case "losers": return <MoversBody rows={losers} onPick={setSelected} />;
-      case "news": return <TVNews symbol={selected} />;
+      case "news": return <NewsPanel symbol={selected} />;
       case "calendar": return <TVEconCalendar />;
-      case "hotlists": return <TVHotlists />;
       case "heatmap": return <TVHeatmap />;
-      case "headlines": return <NewsPanel symbol={selected} />;
       case "ratings": return <RatingsPanel symbol={selected} />;
       case "fundamentals": return <FundamentalsPanel symbol={selected} />;
       case "macro": return <MacroPanel />;
@@ -279,17 +276,21 @@ export function TerminalShell() {
           compass), desaturated and masked into the dark, over faint engraved outlines + a green wash.
           Sophisticated, present, never loud — the terminal's signature. */}
       <div aria-hidden className="pointer-events-none fixed inset-0 z-0 bg-[#08080a]">
-        {/* full-bleed Blake painting watermark — shows through the translucent panes + gaps */}
+        {/* a single, STILL William Blake painting — no animation. Desaturated, veiled for legibility. */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/img/blake-ancient.jpg" alt="" className="absolute inset-0 h-full w-full object-cover object-[center_16%] opacity-[0.26] grayscale contrast-[1.2]" />
-        {/* engraved compass outlines over it */}
-        <div className="absolute inset-0 opacity-[0.13]"><AncientOfDays className="h-full w-full" /></div>
-        {/* green wash + a soft dark veil so dense data stays readable */}
-        <div className="absolute inset-0" style={{ background: "radial-gradient(55% 50% at 40% 22%, rgba(52,240,3,0.06), transparent 68%), linear-gradient(180deg, rgba(8,8,10,0.4) 0%, rgba(8,8,10,0.6) 100%)" }} />
+        <img src="/img/blake-ancient.jpg" alt="" className="absolute inset-0 h-full w-full object-cover object-[center_14%] opacity-[0.2] grayscale contrast-[1.15]" />
+        <div className="absolute inset-0" style={{ background: "radial-gradient(50% 45% at 42% 20%, rgba(52,240,3,0.05), transparent 66%), linear-gradient(180deg, rgba(8,8,10,0.45) 0%, rgba(8,8,10,0.66) 100%)" }} />
       </div>
       {/* the visible agent cursor (fixed overlay) */}
       <HorizonCursor ref={cursorRef} />
       <KeyModal open={keyOpen} onClose={() => setKeyOpen(false)} onChanged={() => {}} />
+      {expanded && (
+        <div className="fixed inset-0 z-[85] grid place-items-center bg-black/70 p-6 backdrop-blur-sm" onClick={() => setExpanded(null)}>
+          <div onClick={(e) => e.stopPropagation()} className="h-[82vh] w-full max-w-5xl">
+            <Pane title={ALL_PANELS.find((x) => x.id === expanded)?.title ?? expanded} className="h-full" onClose={() => setExpanded(null)}>{renderPanelBody(expanded)}</Pane>
+          </div>
+        </div>
+      )}
 
       {/* ── top bar ── */}
       <header className="relative z-10 flex h-[52px] shrink-0 items-center gap-4 border-b border-border bg-[#0a0a0b]/80 px-4 backdrop-blur-md">
@@ -307,8 +308,10 @@ export function TerminalShell() {
         </div>
       </header>
 
-      {/* ── ticker tape ribbon (TradingView) ── */}
-      <div className="relative z-10 h-9 shrink-0 overflow-hidden border-b border-border bg-[#0a0a0b]/50"><TVTickerTape /></div>
+      {/* ── compact ticker ribbon (our data, our style) ── */}
+      <div className="relative z-10 flex h-7 shrink-0 items-center overflow-hidden border-b border-border bg-[#0a0a0b]/60">
+        <TickerRibbon indices={indices} quotes={quotes} />
+      </div>
 
       {/* ── body: three rails ── */}
       <div className="relative z-10 grid min-h-0 flex-1 gap-2 p-2" style={{ gridTemplateColumns: "minmax(215px,245px) minmax(0,1fr) minmax(400px,460px)" }}>
@@ -350,10 +353,10 @@ export function TerminalShell() {
           </Pane>
         </div>
 
-        {/* CENTER: performance header + chart + movers */}
-        <div className="grid min-h-0 grid-rows-[auto_1.7fr_1fr] gap-2">
+        {/* CENTER: performance + add-bar (top) + big chart + panel strip */}
+        <div className="grid min-h-0 grid-rows-[auto_auto_1fr_auto] gap-2">
           <Pane n={3} title={`Performance · ${selected}`} right={<a href={`https://robinhoodchain.blockscout.com/token/${sel?.address}`} target="_blank" rel="noreferrer" className="font-mono text-[0.6rem] text-muted-foreground hover:text-signal">contract ↗</a>}>
-            <div className="flex flex-wrap items-center gap-x-6 gap-y-1 px-4 py-3">
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-1 px-4 py-2.5">
               <div className="flex items-center gap-3">
                 <Logo s={selected} size={26} />
                 <div>
@@ -369,28 +372,32 @@ export function TerminalShell() {
             </div>
           </Pane>
 
+          {/* add-panel toolbar — pinned at the TOP, always visible (no scrolling to add) */}
+          <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-border bg-[#0b0b0d]/62 px-2.5 py-1.5 backdrop-blur-md">
+            <span className="font-mono text-[0.56rem] uppercase tracking-widest text-signal">＋ panel</span>
+            {ALL_PANELS.filter((p) => !panels.includes(p.id)).map((p) => (
+              <button key={p.id} onClick={() => openPanel(p.id)} className="rounded border border-border px-2 py-0.5 font-mono text-[0.6rem] uppercase tracking-wide text-muted-foreground transition-colors hover:border-signal/40 hover:text-signal">{p.title}</button>
+            ))}
+            {ALL_PANELS.every((p) => panels.includes(p.id)) && <span className="font-mono text-[0.6rem] text-muted-foreground/40">all open</span>}
+          </div>
+
+          {/* the chart — fills the remaining height (big) */}
           <Pane n={4} title={charts.length > 1 ? `Charts · ${charts.length}` : `Chart · ${selected}`} right={
             <div className="flex items-center gap-1">
               {RANGES.map((r) => <button key={r} onClick={() => setRange(r)} className={`rounded px-1.5 py-0.5 font-mono text-[0.6rem] uppercase transition-colors ${range === r ? "bg-signal/15 text-signal" : "text-muted-foreground hover:text-foreground"}`}>{r}</button>)}
-              <button onClick={addNextChart} disabled={charts.length >= 4} title="add a chart" className="ml-1 grid h-4 w-4 place-items-center rounded bg-signal/15 font-mono text-[0.7rem] text-signal transition-colors hover:bg-signal/25 disabled:opacity-30">+</button>
+              <button onClick={addNextChart} disabled={charts.length >= 4} title="add a chart" className="ml-1 grid h-4 w-4 place-items-center rounded bg-signal/15 font-mono text-[0.7rem] text-signal transition-colors hover:bg-signal/25 disabled:opacity-30">＋</button>
             </div>
           } bodyClass="p-0">
             <ChartWorkspace charts={charts} activeId={activeId} range={range} onFocus={setActiveId} onClose={closeChart} onHandle={(id, h) => { handlesRef.current[id] = h; }} />
           </Pane>
 
-          <div className="flex min-h-0 flex-col gap-2">
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="font-mono text-[0.56rem] uppercase tracking-widest text-muted-foreground/60">+ panel</span>
-              {ALL_PANELS.filter((p) => !panels.includes(p.id)).map((p) => (
-                <button key={p.id} onClick={() => openPanel(p.id)} className="rounded border border-border px-2 py-0.5 font-mono text-[0.6rem] uppercase tracking-wide text-muted-foreground transition-colors hover:border-signal/40 hover:text-signal">{p.title}</button>
-              ))}
-              {ALL_PANELS.every((p) => panels.includes(p.id)) && <span className="font-mono text-[0.6rem] text-muted-foreground/40">all open</span>}
-            </div>
-            <div className="grid min-h-0 flex-1 auto-rows-[210px] grid-cols-2 gap-2 overflow-auto pr-0.5">
+          {/* panels — a visible horizontal strip at the bottom (scroll sideways for more) */}
+          {panels.length > 0 && (
+            <div className="flex h-[218px] shrink-0 gap-2 overflow-x-auto pb-0.5">
               {panels.map((id) => { const p = ALL_PANELS.find((x) => x.id === id); if (!p) return null;
-                return <Pane key={id} title={p.title} onClose={() => closePanel(id)}>{renderPanelBody(id)}</Pane>; })}
+                return <div key={id} className="h-full w-[336px] shrink-0"><Pane title={p.title} className="h-full" onClose={() => closePanel(id)} onExpand={() => setExpanded(id)}>{renderPanelBody(id)}</Pane></div>; })}
             </div>
-          </div>
+          )}
         </div>
 
         {/* RIGHT: the terminal agent */}
@@ -417,6 +424,26 @@ function Empty({ children }: { children: React.ReactNode }) {
 }
 
 
+function TickerRibbon({ indices, quotes }: { indices: { label: string; changePct: number; price: number }[]; quotes: Record<string, { price: number; changePct: number }> }) {
+  const stocks = ["NVDA", "AAPL", "TSLA", "MSFT", "META", "AMZN", "GOOGL", "AMD", "COIN", "SPY", "QQQ"].map((s) => ({ label: s, q: quotes[s] })).filter((x) => x.q);
+  const items = [
+    ...indices.map((m) => ({ label: m.label, price: m.price, ch: m.changePct })),
+    ...stocks.map((x) => ({ label: x.label, price: x.q!.price, ch: x.q!.changePct })),
+  ];
+  if (!items.length) return <div className="px-4 font-mono text-[0.6rem] uppercase tracking-widest text-muted-foreground/40">loading markets…</div>;
+  return (
+    <div className="flex h-full items-center gap-5 overflow-x-auto px-4 font-mono text-[0.64rem] whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none]">
+      {items.map((it, i) => (
+        <span key={i} className="flex shrink-0 items-center gap-1.5">
+          <span className="uppercase tracking-wide text-muted-foreground">{it.label}</span>
+          <span className="tabular-nums text-foreground/75">{fmt(it.price)}</span>
+          <span className={`tabular-nums ${it.ch >= 0 ? "text-signal" : "text-[#ff5a5a]"}`}>{it.ch >= 0 ? "+" : ""}{it.ch.toFixed(2)}%</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function MoversBody({ rows, onPick, up }: { rows: Mover[]; onPick: (s: string) => void; up?: boolean }) {
   if (rows.length === 0) return <Empty>loading…</Empty>;
   return (
@@ -432,6 +459,20 @@ function MoversBody({ rows, onPick, up }: { rows: Mover[]; onPick: (s: string) =
       </tbody>
     </table>
   );
+}
+
+// light markdown for agent messages — bullets, bold, clean line breaks
+function renderMd(text: string): React.ReactNode {
+  const bold = (s: string) => s.split(/(\*\*[^*]+\*\*)/g).map((p, j) => (p.startsWith("**") && p.endsWith("**"))
+    ? <strong key={j} className="font-semibold text-foreground">{p.slice(2, -2)}</strong> : <span key={j}>{p}</span>);
+  return text.split("\n").map((line, i) => {
+    if (!line.trim()) return <div key={i} className="h-1.5" />;
+    const isBullet = /^\s*[·•\-]\s+/.test(line);
+    const body = bold(line.replace(/^\s*[·•\-]\s+/, ""));
+    return isBullet
+      ? <div key={i} className="flex gap-1.5"><span className="mt-px shrink-0 text-signal">›</span><span className="min-w-0">{body}</span></div>
+      : <div key={i}>{body}</div>;
+  });
 }
 
 // ── Horizon agent rail — a real chat that operates the terminal ──
@@ -473,6 +514,7 @@ function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrade, ta
                 i run this terminal. tell me what to look at — i&apos;ll read the tape, draw on the chart, pull news, open panels, and set up trades for you to sign.
               </div>
             </div>
+            <InlineKeySetup onMore={onSettings} />
             <div className="space-y-1.5">
               <div className="font-mono text-[0.58rem] uppercase tracking-widest text-muted-foreground/60">try</div>
               {examples.map((e) => (
@@ -488,7 +530,7 @@ function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrade, ta
         ) : (
           <div key={i} className="flex items-start gap-2.5">
             <span className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full border border-signal/40 bg-signal/10"><UrizenMark className="h-3.5 w-auto text-signal" /></span>
-            <div className="max-w-[85%] whitespace-pre-wrap rounded-xl rounded-tl-sm border border-border bg-white/[0.03] px-3 py-2 text-[0.82rem] leading-relaxed text-foreground/90">{m.content}</div>
+            <div className="max-w-[88%] space-y-0.5 rounded-xl rounded-tl-sm border border-border bg-white/[0.03] px-3 py-2 text-[0.82rem] leading-relaxed text-foreground/90">{renderMd(m.content)}</div>
           </div>
         ))}
         {busy && status && (

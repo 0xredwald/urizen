@@ -117,3 +117,31 @@ export function KeyModal({ open, onClose, onChanged }: { open: boolean; onClose:
     </div>
   );
 }
+
+// A compact inline version for the agent rail — set up the key right there, no modal click.
+export function InlineKeySetup({ onChanged, onMore }: { onChanged?: () => void; onMore?: () => void }) {
+  const [keys, setKeys] = useState<{ provider: Provider; last4: string }[]>([]);
+  const [free, setFree] = useState(true);
+  const [input, setInput] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const refresh = () => { setKeys(listProviderKeys()); setFree(isFreeMode()); };
+  useEffect(() => { refresh(); }, []);
+  const save = () => { const k = input.trim(); if (!k) return; try { addProviderKey(k); setInput(""); setErr(null); refresh(); onChanged?.(); } catch (e) { setErr((e as Error).message); } };
+  return (
+    <div className="rounded-xl border border-border bg-white/[0.02] p-3">
+      <div className="flex items-center justify-between">
+        <span className="flex items-center gap-1.5 font-mono text-[0.6rem] uppercase tracking-widest text-signal"><span className="h-1.5 w-1.5 rounded-full bg-signal" />{free ? "Free Mode" : `${keys[0]?.provider} connected`}</span>
+        {onMore && <button onClick={onMore} className="font-mono text-[0.58rem] uppercase tracking-widest text-muted-foreground hover:text-signal">manage</button>}
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2.5 text-foreground/70">
+        {["openrouter", "anthropic", "openai", "xai", "google", "deepseek", "meta", "mistral", "qwen", "groq"].map((b) => <span key={b} title={b} className="opacity-55 transition-opacity hover:opacity-100"><Brand brand={b} size={16} /></span>)}
+      </div>
+      <div className="mt-2.5 flex items-center gap-2 rounded-lg border border-border bg-[#0d0d10] p-1 focus-within:border-signal/40">
+        <input value={input} onChange={(e) => setInput(e.target.value)} type="password" placeholder="paste a key for the top models…" className="min-w-0 flex-1 bg-transparent px-2 py-1 font-mono text-[0.76rem] outline-none placeholder:text-muted-foreground/50" />
+        <button onClick={save} disabled={!input.trim()} className="rounded-md bg-signal/15 px-2.5 py-1 font-mono text-[0.66rem] uppercase tracking-widest text-signal transition-colors hover:bg-signal/25 disabled:opacity-40">add</button>
+      </div>
+      {err && <div className="mt-1.5 font-mono text-[0.68rem] text-[#ff5a5a]">{err}</div>}
+      <div className="mt-1.5 text-[0.7rem] leading-snug text-muted-foreground">encrypted in your browser, sent only to the provider — or just keep Free Mode.</div>
+    </div>
+  );
+}
