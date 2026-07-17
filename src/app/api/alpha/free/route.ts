@@ -23,7 +23,8 @@ function crossOrigin(req: Request): boolean {
   if (!origin) return false;
   try {
     const host = new URL(origin).host;
-    return !(host === "urizenfund.com" || host.endsWith(".urizenfund.com") || host === "localhost" || host.startsWith("localhost:") || host === "127.0.0.1" || host.startsWith("127.0.0.1:"));
+    // allow the site, local dev, and our own Vercel preview/staging deploys (branch previews)
+    return !(host === "urizenfund.com" || host.endsWith(".urizenfund.com") || host.endsWith(".vercel.app") || host === "localhost" || host.startsWith("localhost:") || host === "127.0.0.1" || host.startsWith("127.0.0.1:"));
   } catch { return true; }
 }
 
