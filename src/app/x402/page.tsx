@@ -84,12 +84,10 @@ export default function X402Desk() {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const pay = wrapFetchWithPayment(fetch, signer as any, BigInt(1_000_000));
 
-      // paid → choreograph the analyst panel while the request is in flight
+      // paid → choreograph the pipeline (5 nodes) while the request is in flight
       setPhase("synth"); setActive(0);
-      if (depth === "deep") {
-        AGENTS.forEach((_, i) => timers.current.push(setTimeout(() => setActive(i), i * 3000)));
-        timers.current.push(setTimeout(() => setActive(AGENTS.length), AGENTS.length * 3000));
-      }
+      const step = depth === "deep" ? 2800 : depth === "standard" ? 1500 : 900;
+      for (let i = 1; i <= AGENTS.length; i++) timers.current.push(setTimeout(() => setActive(i), i * step));
       const res = await pay(`/api/x402/analyze?ticker=${encodeURIComponent(query)}&depth=${depth}`);
       const body = await res.json();
       clearTimers();
@@ -109,17 +107,19 @@ export default function X402Desk() {
 
   return (
     <main className="relative min-h-screen overflow-hidden text-foreground">
-      {/* ── Blake "Ancient of Days" — the measure of the void, made visible ──
-          fixed + z-0 (not -z-10) with its own base fill, so main's own layer can't paint over it. */}
-      <div aria-hidden className="pointer-events-none fixed inset-0 z-0">
-        <div className="absolute inset-0 bg-[#07070a]" />
+      {/* ── minimal, monochrome Blake behind an animated green dither ──
+          fixed + z-0 (not -z-10) so main's own layer can't paint over it. */}
+      <div aria-hidden className="pointer-events-none fixed inset-0 z-0 bg-[#060608]">
+        {/* the Ancient of Days — desaturated to a whisper, no colour cast */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/img/blake-ancient.jpg" alt="" className="kenburns absolute inset-0 h-full w-full object-cover object-[center_20%] opacity-[0.82]" />
-        {/* warm horizon glow where the sun-disc sits, fading to dark for legibility below */}
-        <div className="absolute inset-0" style={{ background: "radial-gradient(120% 80% at 50% 8%, rgba(255,150,40,0.10) 0%, transparent 42%), linear-gradient(180deg, rgba(7,7,10,0.15) 0%, rgba(7,7,10,0.30) 40%, rgba(7,7,10,0.78) 74%, #07070a 100%)" }} />
-        <div className="aurora absolute inset-0" />
-        <div className="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-signal/40 to-transparent" />
-        <div className="absolute inset-0 opacity-[0.05]" style={{ backgroundImage: "url(/img/noise.svg)" }} />
+        <img src="/img/blake-ancient.jpg" alt="" className="kenburns absolute inset-0 h-full w-full object-cover object-[center_16%]"
+          style={{ filter: "grayscale(1) contrast(1.15) brightness(0.6)", opacity: 0.24 }} />
+        {/* two interfering dot-grids drifting opposite ways = a soft diffusion shimmer */}
+        <div className="dither dither-a" />
+        <div className="dither dither-b" />
+        {/* soft vignette to hold the centre + a whisper of green at the base */}
+        <div className="absolute inset-0" style={{ background: "radial-gradient(135% 95% at 50% 40%, transparent 0%, transparent 44%, rgba(6,6,8,0.72) 82%, #060608 100%)" }} />
+        <div className="absolute inset-x-0 bottom-0 h-1/3" style={{ background: "radial-gradient(55% 100% at 50% 125%, rgba(52,240,3,0.10), transparent 72%)" }} />
       </div>
 
       {/* ── top bar ── */}
@@ -227,32 +227,41 @@ export default function X402Desk() {
           </div>
         )}
 
-        {/* ── synthesizing ── */}
-        {phase === "synth" && (
-          <div className="w-full max-w-2xl text-center">
-            <div className="font-mono text-[0.72rem] uppercase tracking-[0.2em] text-signal">Synthesizing · {mode === "market" ? "US market" : `$${ticker}`}</div>
-            <div className="mt-8 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              {AGENTS.map((a, i) => {
-                const state = i < active ? "done" : i === active ? "live" : "idle";
-                const sub = mode === "market" ? a.market : a.stock;
-                return (
-                  <div key={a.key} className={`rounded-xl border p-4 text-left transition-all duration-500 ${state === "live" ? "border-signal/60 bg-signal/[0.06] shadow-[0_0_30px_rgba(52,240,3,0.15)]" : state === "done" ? "border-signal/25 bg-white/[0.02]" : "border-white/8 bg-white/[0.01] opacity-45"}`}>
-                    <div className="flex items-center justify-between">
-                      <span className="font-display text-sm text-foreground">{a.label}</span>
-                      <span className={`h-1.5 w-1.5 rounded-full ${state === "live" ? "animate-ping bg-signal" : state === "done" ? "bg-signal" : "bg-white/20"}`} />
+        {/* ── synthesizing: a quiet pipeline that fills as each analyst lands ── */}
+        {phase === "synth" && (() => {
+          const rows = [
+            ...AGENTS.map((a) => ({ label: a.label, sub: mode === "market" ? a.market : a.stock })),
+            { label: mode === "market" ? "Chief strategist" : "Portfolio manager", sub: "reconciling the panel" },
+          ];
+          const linePct = Math.min(100, (Math.max(active, 0) / (rows.length - 1)) * 100);
+          return (
+            <div className="w-full max-w-md">
+              <div className="text-center font-mono text-[0.72rem] uppercase tracking-[0.24em] text-signal">Synthesizing · {mode === "market" ? "US market" : `$${ticker}`}</div>
+              <div className="relative mt-10 pl-8">
+                <div className="absolute left-[7px] top-1.5 bottom-1.5 w-px bg-white/10">
+                  <div className="w-full bg-gradient-to-b from-signal to-signal/50 transition-[height] duration-[900ms] ease-out" style={{ height: `${linePct}%` }} />
+                </div>
+                {rows.map((r, i) => {
+                  const state = i < active ? "done" : i === active ? "live" : "idle";
+                  return (
+                    <div key={r.label} className="relative pb-8 last:pb-0">
+                      <span className={`absolute -left-8 top-0.5 grid h-[15px] w-[15px] place-items-center rounded-full border transition-all duration-700 ${state === "idle" ? "border-white/25 bg-[#060608]" : "border-signal bg-signal"} ${state === "live" ? "nodepulse" : ""}`}>
+                        {state === "done" && <svg viewBox="0 0 10 10" className="h-2 w-2 text-[#060608]"><path d="M1.5 5.2 4 7.5 8.5 2.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+                      </span>
+                      <div className={`transition-opacity duration-700 ${state === "idle" ? "opacity-40" : "opacity-100"}`}>
+                        <div className="font-display text-[15px] leading-none text-foreground">{r.label}</div>
+                        <div className={`mt-1.5 font-mono text-[0.7rem] ${state === "live" ? "shimmer text-signal" : "text-muted-foreground"}`}>
+                          {state === "done" ? "read complete" : state === "live" ? r.sub + "…" : r.sub}
+                        </div>
+                      </div>
                     </div>
-                    <div className="mt-1 font-mono text-[0.68rem] text-muted-foreground">{state === "done" ? "read complete" : state === "live" ? sub + "…" : sub}</div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
+              <div className="mt-4 pl-8 font-mono text-[0.68rem] uppercase tracking-[0.18em] text-muted-foreground/60">measuring the tape — a moment</div>
             </div>
-            <div className={`mx-auto mt-6 w-full max-w-md rounded-xl border p-4 transition-all duration-500 ${active >= AGENTS.length ? "border-signal/60 bg-signal/[0.06] shadow-[0_0_30px_rgba(52,240,3,0.15)]" : "border-white/8 opacity-45"}`}>
-              <div className="font-display text-sm">{mode === "market" ? "Chief strategist" : "Portfolio manager"}</div>
-              <div className="mt-1 font-mono text-[0.68rem] text-muted-foreground">{active >= AGENTS.length ? "reconciling the panel into a verdict…" : "awaiting the analysts"}</div>
-            </div>
-            <div className="mt-6 font-mono text-[0.7rem] uppercase tracking-[0.16em] text-muted-foreground/70">measuring the tape — this takes a moment</div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* ── output ── */}
         {phase === "done" && report && (
@@ -293,13 +302,28 @@ export default function X402Desk() {
       </section>
 
       <style>{`
-        @keyframes kb { 0% { transform: scale(1) translateY(0); } 100% { transform: scale(1.08) translateY(-1.5%); } }
-        .kenburns { animation: kb 48s ease-in-out infinite alternate; }
-        @keyframes drift { 0% { transform: translate(-3%, 2%); opacity: .8; } 100% { transform: translate(3%, -2%); opacity: 1; } }
-        .aurora { animation: drift 24s ease-in-out infinite alternate; background:
-          radial-gradient(40% 46% at 20% 82%, rgba(52,240,3,0.12), transparent 62%),
-          radial-gradient(42% 48% at 84% 88%, rgba(52,240,3,0.09), transparent 64%); }
-        @media (prefers-reduced-motion: reduce) { .kenburns, .aurora { animation: none; } }
+        @keyframes kb { 0% { transform: scale(1) translateY(0); } 100% { transform: scale(1.07) translateY(-1.4%); } }
+        .kenburns { animation: kb 60s ease-in-out infinite alternate; will-change: transform; }
+
+        /* animated dither — a fine dot-grid, translated by exactly one tile for a seamless drift.
+           two layers at different scales/directions interfere into a soft diffusion shimmer. */
+        .dither { position: absolute; inset: -8px; mix-blend-mode: screen; will-change: transform, opacity; }
+        .dither-a { background-image: radial-gradient(circle, rgba(52,240,3,0.34) 0.6px, transparent 1.1px);
+          background-size: 3px 3px; animation: ditherA 6s linear infinite, breathe 7s ease-in-out infinite; }
+        .dither-b { background-image: radial-gradient(circle, rgba(52,240,3,0.20) 0.6px, transparent 1.1px);
+          background-size: 4px 4px; opacity: .6; animation: ditherB 9s linear infinite, breathe 11s ease-in-out infinite; }
+        @keyframes ditherA { to { transform: translate(3px, 3px); } }
+        @keyframes ditherB { to { transform: translate(-4px, 4px); } }
+        @keyframes breathe { 0%,100% { opacity: .32; } 50% { opacity: .6; } }
+
+        /* smooth node pulse for the live analyst — no jarring ping */
+        @keyframes nodepulse { 0% { box-shadow: 0 0 0 0 rgba(52,240,3,.45); } 100% { box-shadow: 0 0 0 9px rgba(52,240,3,0); } }
+        .nodepulse { animation: nodepulse 1.9s ease-out infinite; }
+        @keyframes sh { 0% { background-position: -140% 0; } 100% { background-position: 140% 0; } }
+        .shimmer { background: linear-gradient(90deg, rgba(52,240,3,.45) 0%, rgba(52,240,3,1) 50%, rgba(52,240,3,.45) 100%);
+          background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+          animation: sh 2.4s linear infinite; }
+        @media (prefers-reduced-motion: reduce) { .kenburns, .dither, .nodepulse, .shimmer { animation: none; } }
       `}</style>
     </main>
   );
