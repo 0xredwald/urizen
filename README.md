@@ -59,15 +59,6 @@ An autonomous, non-custodial book on Robinhood Chain. Bankr fees fund a reflexiv
 agents seed and manage a CASHCAT/SPCX Uniswap v4 LP, capture the volume, and use the profits to buy
 back **$URI**. Every position, fill and pool is on-chain and verifiable.
 
-## x402 API
-
-A paid, per-call equity-analysis endpoint for other AI agents ([x402](https://x402.org) — HTTP 402,
-USDC on Base). One call returns a synthesized thesis from a four-analyst panel over real data.
-
-```
-GET https://urizenfund.com/api/x402/analyze?ticker=NVDA&depth=deep
-```
-
 ## Stack
 
 Next.js · Robinhood Chain (Uniswap v4) · wagmi / RainbowKit · Rialto best-execution routing ·
