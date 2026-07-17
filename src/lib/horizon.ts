@@ -18,6 +18,8 @@ export type HAction =
   | { tool: "marker"; t: number; price: number; text: string }
   | { tool: "clearDrawings" }
   | { tool: "checkNews"; symbol?: string }
+  | { tool: "openPanel"; panel: string }
+  | { tool: "closePanel"; panel: string }
   | { tool: "proposeTrade"; side: "buy" | "sell"; symbol: string; amount: number };
 
 export type HorizonReply = { say: string; actions: HAction[] };
@@ -39,6 +41,7 @@ function systemPrompt(ctx: HorizonCtx): string {
     `{"tool":"drawTrendline","from":{"t":<unix_sec>,"price":<n>},"to":{"t":<unix_sec>,"price":<n>},"label":"uptrend"}`,
     `{"tool":"drawHLine","price":<n>,"label":"support"} · {"tool":"marker","t":<unix_sec>,"price":<n>,"text":"breakout"}`,
     `{"tool":"clearDrawings"} · {"tool":"checkNews","symbol":"NVDA"} · {"tool":"proposeTrade","side":"buy|sell","symbol":"NVDA","amount":<usd>}`,
+    `{"tool":"openPanel","panel":"news|ratings|fundamentals|macro|predictions|onchain|gainers|losers"} (add a data panel to the terminal) · {"tool":"closePanel","panel":"…"}`,
     "",
     "RULES:",
     "- For drawTrendline/marker, `t` MUST be a timestamp that appears in the CANDLES below, and `price` a real level from the data (a swing high/low, a close). Connect two real pivots for a trendline.",

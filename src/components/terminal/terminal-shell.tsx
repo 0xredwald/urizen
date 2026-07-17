@@ -7,6 +7,8 @@ import { type ChartHandle } from "@/components/terminal/kline-chart";
 import { HorizonCursor, type CursorHandle } from "@/components/terminal/horizon-cursor";
 import { TradeTicket, type ProposedTrade } from "@/components/terminal/trade-ticket";
 import { ChartWorkspace } from "@/components/terminal/chart-workspace";
+import { KeyModal } from "@/components/terminal/key-modal";
+import { NewsPanel, RatingsPanel, FundamentalsPanel, MacroPanel, PredictionsPanel, OnchainPanel } from "@/components/terminal/data-panels";
 import { AncientOfDays } from "@/components/quant/ancient-of-days";
 import { UrizenMark } from "@/components/brand/marks";
 import { STOCKS } from "@/lib/stocks";
@@ -27,6 +29,14 @@ const logo = (s: string) => `https://financialmodelingprep.com/image-stock/${s}.
 const fmt = (n: number, d = 2) => n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
 const pct = (n: number) => `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
 
+// the panels the user (and the agent) can add/close in the centre workspace
+const ALL_PANELS: { id: string; title: string }[] = [
+  { id: "gainers", title: "Top gainers" }, { id: "losers", title: "Top losers" },
+  { id: "news", title: "News" }, { id: "ratings", title: "Analyst ratings" },
+  { id: "fundamentals", title: "Fundamentals" }, { id: "macro", title: "Macro" },
+  { id: "predictions", title: "Prediction markets" }, { id: "onchain", title: "On-chain" },
+];
+
 function Logo({ s, size = 18 }: { s: string; size?: number }) {
   const [err, setErr] = useState(false);
   if (err) return <span className="grid shrink-0 place-items-center rounded-full bg-white/10 font-mono text-[8px] text-foreground/60" style={{ width: size, height: size }}>{s.slice(0, 2)}</span>;
@@ -35,15 +45,18 @@ function Logo({ s, size = 18 }: { s: string; size?: number }) {
 }
 
 // A titled, numbered pane — the Bloomberg tell.
-function Pane({ n, title, right, children, className = "", bodyClass = "" }: { n: number; title: string; right?: React.ReactNode; children: React.ReactNode; className?: string; bodyClass?: string }) {
+function Pane({ n, title, right, children, className = "", bodyClass = "", onClose }: { n?: number; title: string; right?: React.ReactNode; children: React.ReactNode; className?: string; bodyClass?: string; onClose?: () => void }) {
   return (
     <section className={`flex min-h-0 flex-col overflow-hidden border border-border bg-[#0b0b0d]/70 backdrop-blur-sm ${className}`}>
       <header className="flex h-8 shrink-0 items-center justify-between border-b border-border px-3">
         <div className="flex items-center gap-2">
-          <span className="grid h-4 w-4 place-items-center rounded-[3px] bg-signal/15 font-mono text-[9px] text-signal">{n}</span>
+          {n != null && <span className="grid h-4 w-4 place-items-center rounded-[3px] bg-signal/15 font-mono text-[9px] text-signal">{n}</span>}
           <span className="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-muted-foreground">{title}</span>
         </div>
-        {right}
+        <div className="flex items-center gap-2">
+          {right}
+          {onClose && <button onClick={onClose} title="close panel" className="font-mono text-[0.85rem] leading-none text-muted-foreground/50 transition-colors hover:text-[#ff5a5a]">×</button>}
+        </div>
       </header>
       <div className={`min-h-0 flex-1 overflow-auto ${bodyClass}`}>{children}</div>
     </section>
@@ -69,7 +82,27 @@ export function TerminalShell() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
   const [pendingTrade, setPendingTrade] = useState<ProposedTrade | null>(null);
+  const [keyOpen, setKeyOpen] = useState(false);
+  const [panels, setPanels] = useState<string[]>(["gainers", "losers", "news"]);
   const { address } = useAccount();
+
+  useEffect(() => { try { const s = localStorage.getItem("urizen.terminal.panels"); if (s) setPanels(JSON.parse(s)); } catch { /* noop */ } }, []);
+  const persistPanels = (p: string[]) => { setPanels(p); try { localStorage.setItem("urizen.terminal.panels", JSON.stringify(p)); } catch { /* noop */ } };
+  const openPanel = (id: string) => { if (ALL_PANELS.some((p) => p.id === id)) persistPanels(panels.includes(id) ? panels : [...panels, id]); };
+  const closePanel = (id: string) => persistPanels(panels.filter((p) => p !== id));
+  const renderPanelBody = (id: string) => {
+    switch (id) {
+      case "gainers": return <MoversBody rows={gainers} onPick={setSelected} up />;
+      case "losers": return <MoversBody rows={losers} onPick={setSelected} />;
+      case "news": return <NewsPanel symbol={selected} />;
+      case "ratings": return <RatingsPanel symbol={selected} />;
+      case "fundamentals": return <FundamentalsPanel symbol={selected} />;
+      case "macro": return <MacroPanel />;
+      case "predictions": return <PredictionsPanel symbol={selected} />;
+      case "onchain": return <OnchainPanel symbol={selected} />;
+      default: return null;
+    }
+  };
 
   // the active chart drives the header / trade / agent grounding; setSelected retargets it
   const activeChart = charts.find((c) => c.id === activeId) ?? charts[0];
@@ -126,6 +159,8 @@ export function TerminalShell() {
           if (cur && xy) { cur.show(a.text.slice(0, 14)); await cur.moveTo(xy.x, xy.y); await cur.press(); }
           chart?.createOverlay("simpleAnnotation", [{ timestamp: a.t * 1000, value: a.price }], { extendData: a.text });
           await wait(450);
+        } else if (a.tool === "openPanel") { setStatus(`opening ${a.panel}`); openPanel(a.panel); await wait(500);
+        } else if (a.tool === "closePanel") { closePanel(a.panel); await wait(300);
         } else if (a.tool === "checkNews") {
           const sym = a.symbol || selected; setStatus(`checking ${sym} news…`);
           const news = await fetch(`/api/quant/news?symbol=${encodeURIComponent(sym)}`).then((r) => r.json()).catch(() => null);
@@ -134,7 +169,7 @@ export function TerminalShell() {
           await wait(300);
         } else if (a.tool === "proposeTrade") {
           setStatus(`preparing ${a.side} ${a.symbol}…`);
-          setPendingTrade({ side: a.side, symbol: a.symbol, amount: a.amount, note: `Horizon suggests ${a.side === "buy" ? "buying" : "selling"} ${a.symbol}.` });
+          setPendingTrade({ side: a.side, symbol: a.symbol, amount: a.amount, note: `the agent suggests ${a.side === "buy" ? "buying" : "selling"} ${a.symbol}.` });
           await wait(300);
         }
       } catch { /* one bad action shouldn't kill the sequence */ }
@@ -231,10 +266,14 @@ export function TerminalShell() {
 
   return (
     <main className="relative flex h-screen flex-col overflow-hidden bg-[#0a0a0b] text-foreground">
-      {/* faint Blake compass behind everything */}
-      <div aria-hidden className="pointer-events-none fixed inset-0 z-0 opacity-[0.10]"><AncientOfDays className="h-full w-full" /></div>
-      {/* the visible Horizon cursor (fixed overlay) */}
+      {/* Blake compass behind everything — visible, with a soft green wash */}
+      <div aria-hidden className="pointer-events-none fixed inset-0 z-0">
+        <div className="absolute inset-0" style={{ background: "radial-gradient(65% 60% at 50% 32%, rgba(52,240,3,0.08), transparent 72%)" }} />
+        <div className="absolute inset-0 opacity-[0.42]"><AncientOfDays className="h-full w-full" /></div>
+      </div>
+      {/* the visible agent cursor (fixed overlay) */}
       <HorizonCursor ref={cursorRef} />
+      <KeyModal open={keyOpen} onClose={() => setKeyOpen(false)} onChanged={() => {}} />
 
       {/* ── top bar ── */}
       <header className="relative z-10 flex h-[52px] shrink-0 items-center gap-4 border-b border-border bg-[#0a0a0b]/80 px-4 backdrop-blur-md">
@@ -248,12 +287,12 @@ export function TerminalShell() {
         </div>
         <div className="ml-auto flex items-center gap-4">
           <MarketClock />
-          <ConnectButton chainStatus="icon" showBalance={false} accountStatus="avatar" />
+          <ConnectWalletButton />
         </div>
       </header>
 
       {/* ── body: three rails ── */}
-      <div className="relative z-10 grid min-h-0 flex-1 gap-2 p-2" style={{ gridTemplateColumns: "minmax(230px,260px) minmax(0,1fr) minmax(320px,380px)" }}>
+      <div className="relative z-10 grid min-h-0 flex-1 gap-2 p-2" style={{ gridTemplateColumns: "minmax(215px,245px) minmax(0,1fr) minmax(400px,460px)" }}>
         {/* LEFT: markets + watchlist */}
         <div className="grid min-h-0 grid-rows-[1.6fr_1fr] gap-2">
           <Pane n={1} title="Markets" right={<span className="font-mono text-[0.6rem] text-muted-foreground">{session || "24/7"}</span>}>
@@ -320,25 +359,34 @@ export function TerminalShell() {
             <ChartWorkspace charts={charts} activeId={activeId} range={range} onFocus={setActiveId} onClose={closeChart} onHandle={(id, h) => { handlesRef.current[id] = h; }} />
           </Pane>
 
-          <div className="grid min-h-0 grid-cols-2 gap-2">
-            <MoversPane n={5} title="Top gainers" rows={gainers} onPick={setSelected} up />
-            <MoversPane n={6} title="Top losers" rows={losers} onPick={setSelected} />
+          <div className="flex min-h-0 flex-col gap-2">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="font-mono text-[0.56rem] uppercase tracking-widest text-muted-foreground/60">+ panel</span>
+              {ALL_PANELS.filter((p) => !panels.includes(p.id)).map((p) => (
+                <button key={p.id} onClick={() => openPanel(p.id)} className="rounded border border-border px-2 py-0.5 font-mono text-[0.6rem] uppercase tracking-wide text-muted-foreground transition-colors hover:border-signal/40 hover:text-signal">{p.title}</button>
+              ))}
+              {ALL_PANELS.every((p) => panels.includes(p.id)) && <span className="font-mono text-[0.6rem] text-muted-foreground/40">all open</span>}
+            </div>
+            <div className="grid min-h-0 flex-1 auto-rows-[210px] grid-cols-2 gap-2 overflow-auto pr-0.5">
+              {panels.map((id) => { const p = ALL_PANELS.find((x) => x.id === id); if (!p) return null;
+                return <Pane key={id} title={p.title} onClose={() => closePanel(id)}>{renderPanelBody(id)}</Pane>; })}
+            </div>
           </div>
         </div>
 
-        {/* RIGHT: Horizon agent */}
+        {/* RIGHT: the terminal agent */}
         <HorizonRail selected={selected} messages={messages} busy={busy} status={status} onAsk={ask}
-          pendingTrade={pendingTrade} taker={address ?? null} onClearTrade={() => setPendingTrade(null)} />
+          pendingTrade={pendingTrade} taker={address ?? null} onClearTrade={() => setPendingTrade(null)} onSettings={() => setKeyOpen(true)} />
       </div>
 
       {/* ── bottom status bar ── */}
       <footer className="relative z-10 flex h-7 shrink-0 items-center gap-4 border-t border-border bg-[#0a0a0b]/90 px-4 font-mono text-[0.62rem] text-muted-foreground">
-        <span className="text-signal">● horizon</span>
+        <span className="text-signal">● terminal</span>
         {indices.map((m) => <span key={m.label} className="hidden items-center gap-1.5 sm:inline-flex">{m.label} <span className={m.changePct >= 0 ? "text-signal" : "text-[#ff5a5a]"}>{pct(m.changePct)}</span></span>)}
         <span className="ml-auto hidden gap-4 md:flex">
           <span><kbd className="text-foreground">/</kbd> search</span>
-          <span><kbd className="text-foreground">1–8</kbd> panes</span>
-          <span><kbd className="text-foreground">⌘K</kbd> horizon</span>
+          <span><kbd className="text-foreground">+</kbd> add panel</span>
+          <span><kbd className="text-foreground">↵</kbd> ask the agent</span>
         </span>
       </footer>
     </main>
@@ -350,28 +398,25 @@ function Empty({ children }: { children: React.ReactNode }) {
 }
 
 
-function MoversPane({ n, title, rows, onPick, up }: { n: number; title: string; rows: Mover[]; onPick: (s: string) => void; up?: boolean }) {
+function MoversBody({ rows, onPick, up }: { rows: Mover[]; onPick: (s: string) => void; up?: boolean }) {
+  if (rows.length === 0) return <Empty>loading…</Empty>;
   return (
-    <Pane n={n} title={title}>
-      {rows.length === 0 ? <Empty>loading…</Empty> : (
-        <table className="w-full border-collapse text-[0.74rem]">
-          <tbody>
-            {rows.slice(0, 8).map((m) => (
-              <tr key={m.symbol} onClick={() => onPick(m.symbol)} className="cursor-pointer border-b border-border/40 hover:bg-white/[0.03]">
-                <td className="py-1 pl-3 pr-2"><div className="flex items-center gap-1.5"><Logo s={m.symbol} size={14} /><span className="font-mono">{m.symbol}</span></div></td>
-                <td className="py-1 pr-2 text-right font-mono tabular-nums text-foreground/80">{fmt(m.price)}</td>
-                <td className={`py-1 pr-3 text-right font-mono tabular-nums ${up ? "text-signal" : "text-[#ff5a5a]"}`}>{pct(m.changePct)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </Pane>
+    <table className="w-full border-collapse text-[0.74rem]">
+      <tbody>
+        {rows.slice(0, 12).map((m) => (
+          <tr key={m.symbol} onClick={() => onPick(m.symbol)} className="cursor-pointer border-b border-border/40 hover:bg-white/[0.03]">
+            <td className="py-1 pl-3 pr-2"><div className="flex items-center gap-1.5"><Logo s={m.symbol} size={14} /><span className="font-mono">{m.symbol}</span></div></td>
+            <td className="py-1 pr-2 text-right font-mono tabular-nums text-foreground/80">{fmt(m.price)}</td>
+            <td className={`py-1 pr-3 text-right font-mono tabular-nums ${up ? "text-signal" : "text-[#ff5a5a]"}`}>{pct(m.changePct)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
 // ── Horizon agent rail — a real chat that operates the terminal ──
-function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrade, taker, onClearTrade }: { selected: string; messages: HMsg[]; busy: boolean; status: string; onAsk: (t: string) => void; pendingTrade: ProposedTrade | null; taker: string | null; onClearTrade: () => void }) {
+function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrade, taker, onClearTrade, onSettings }: { selected: string; messages: HMsg[]; busy: boolean; status: string; onAsk: (t: string) => void; pendingTrade: ProposedTrade | null; taker: string | null; onClearTrade: () => void; onSettings: () => void }) {
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const examples = [
@@ -384,14 +429,19 @@ function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrade, ta
   const send = () => { const t = input; setInput(""); onAsk(t); };
 
   return (
-    <Pane n={7} title="Horizon" right={<span className="flex items-center gap-1.5 font-mono text-[0.58rem] uppercase tracking-widest text-signal"><span className={`h-1.5 w-1.5 rounded-full bg-signal ${busy ? "animate-ping" : "animate-pulse"}`} />{busy ? "working" : "online"}</span>} bodyClass="flex flex-col">
+    <Pane n={7} title="Agent" right={
+      <div className="flex items-center gap-2">
+        {busy && <span className="font-mono text-[0.58rem] uppercase tracking-widest text-signal">working…</span>}
+        <button onClick={onSettings} title="Connect intelligence / API key" className="font-mono text-[0.72rem] text-muted-foreground transition-colors hover:text-signal">⚙</button>
+      </div>
+    } bodyClass="flex flex-col">
       <div ref={scrollRef} className="flex-1 space-y-3 overflow-auto p-4">
         {messages.length === 0 && (
           <div className="space-y-4">
             <div className="flex items-start gap-2.5">
               <span className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full border border-signal/40 bg-signal/10"><UrizenMark className="h-3.5 w-auto text-signal" /></span>
               <div className="rounded-xl rounded-tl-sm border border-border bg-white/[0.03] p-3 text-[0.82rem] leading-relaxed text-foreground/90">
-                i&apos;m Horizon. tell me what to look at — i&apos;ll read the tape, draw on the chart, pull news, and set up trades for you to sign.
+                i run this terminal. tell me what to look at — i&apos;ll read the tape, draw on the chart, pull news, open panels, and set up trades for you to sign.
               </div>
             </div>
             <div className="space-y-1.5">
@@ -428,13 +478,13 @@ function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrade, ta
         <div className="flex items-end gap-2 rounded-xl border border-border bg-[#0d0d10] p-1.5 focus-within:border-signal/40">
           <textarea value={input} onChange={(e) => setInput(e.target.value)} rows={1} disabled={busy}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-            placeholder={busy ? "Horizon is working…" : `ask Horizon about ${selected}…`}
+            placeholder={busy ? "working…" : `ask the agent about ${selected}…`}
             className="max-h-24 min-h-[2rem] flex-1 resize-none bg-transparent px-2 py-1.5 text-[0.82rem] outline-none placeholder:text-muted-foreground/50 disabled:opacity-50" />
           <button onClick={send} disabled={busy || !input.trim()} className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-signal/15 text-signal transition-colors hover:bg-signal/25 disabled:opacity-40">
             <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor"><path d="M3 11l18-8-8 18-2-7-8-3z" /></svg>
           </button>
         </div>
-        <div className="mt-1.5 text-center font-mono text-[0.55rem] uppercase tracking-widest text-muted-foreground/40">horizon operates the terminal · you sign every trade</div>
+        <div className="mt-1.5 text-center font-mono text-[0.55rem] uppercase tracking-widest text-muted-foreground/40">the agent operates the terminal · you sign every trade</div>
       </div>
     </Pane>
   );
@@ -474,6 +524,26 @@ function SymbolSearch({ onPick }: { onPick: (s: string) => void }) {
         </div>
       )}
     </div>
+  );
+}
+
+// ── a clean custom connect button (no default RainbowKit chrome) ──
+function ConnectWalletButton() {
+  return (
+    <ConnectButton.Custom>
+      {({ account, chain, openConnectModal, openAccountModal, openChainModal, mounted }) => {
+        const connected = mounted && !!account && !!chain;
+        if (!connected)
+          return <button onClick={openConnectModal} className="rounded-md border border-signal/50 bg-signal/10 px-4 py-1.5 font-mono text-[0.72rem] font-medium uppercase tracking-[0.12em] text-signal transition-colors hover:bg-signal/20">Connect</button>;
+        if (chain.unsupported)
+          return <button onClick={openChainModal} className="rounded-md border border-[#ff5a5a]/50 bg-[#ff5a5a]/10 px-4 py-1.5 font-mono text-[0.72rem] uppercase tracking-[0.12em] text-[#ff5a5a] transition-colors hover:bg-[#ff5a5a]/20">Wrong network</button>;
+        return (
+          <button onClick={openAccountModal} className="flex items-center gap-2 rounded-md border border-border bg-white/[0.03] px-3 py-1.5 font-mono text-[0.72rem] text-foreground transition-colors hover:border-signal/40">
+            <span className="h-1.5 w-1.5 rounded-full bg-signal" />{account.displayName}
+          </button>
+        );
+      }}
+    </ConnectButton.Custom>
   );
 }
 
