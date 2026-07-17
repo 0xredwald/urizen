@@ -118,27 +118,52 @@ export function KeyModal({ open, onClose, onChanged }: { open: boolean; onClose:
   );
 }
 
-// A compact inline version for the agent rail — set up the key right there, no modal click.
+// A compact inline setup for the agent rail — set up the key right there, with clear connected state.
 export function InlineKeySetup({ onChanged, onMore }: { onChanged?: () => void; onMore?: () => void }) {
   const [keys, setKeys] = useState<{ provider: Provider; last4: string }[]>([]);
   const [free, setFree] = useState(true);
+  const [model, setModelState] = useState<string | undefined>(undefined);
   const [input, setInput] = useState("");
   const [err, setErr] = useState<string | null>(null);
-  const refresh = () => { setKeys(listProviderKeys()); setFree(isFreeMode()); };
+  const refresh = () => { setKeys(listProviderKeys()); setFree(isFreeMode()); setModelState(getActiveModel()); };
   useEffect(() => { refresh(); }, []);
   const save = () => { const k = input.trim(); if (!k) return; try { addProviderKey(k); setInput(""); setErr(null); refresh(); onChanged?.(); } catch (e) { setErr((e as Error).message); } };
+  const connected = !free && keys.length > 0;
+
+  // ── connected: a clear green confirmation ──
+  if (connected) {
+    const k = keys[0];
+    const label = MODELS[k.provider].find((mi) => mi.id === model)?.label;
+    return (
+      <div className="rounded-xl border border-signal/40 bg-signal/[0.06] p-3">
+        <div className="flex items-center gap-2">
+          <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-signal/20 text-[0.7rem] text-signal">✓</span>
+          <Brand brand={PROVIDER_BRAND[k.provider]} size={16} />
+          <span className="font-mono text-[0.76rem] text-foreground">{k.provider} connected</span>
+          <span className="ml-auto font-mono text-[0.6rem] uppercase tracking-widest text-muted-foreground">····{k.last4}</span>
+        </div>
+        <div className="mt-1.5 font-mono text-[0.66rem] text-muted-foreground">{label ? `model · ${label}` : "using the default model"}</div>
+        <div className="mt-2 flex items-center gap-3">
+          {onMore && <button onClick={onMore} className="font-mono text-[0.6rem] uppercase tracking-widest text-muted-foreground transition-colors hover:text-signal">change · model</button>}
+          <button onClick={() => { removeProviderKey(k.provider); refresh(); onChanged?.(); }} className="font-mono text-[0.6rem] uppercase tracking-widest text-muted-foreground transition-colors hover:text-[#ff5a5a]">disconnect · use free</button>
+        </div>
+      </div>
+    );
+  }
+
+  // ── free mode: prompt to connect ──
   return (
     <div className="rounded-xl border border-border bg-white/[0.02] p-3">
       <div className="flex items-center justify-between">
-        <span className="flex items-center gap-1.5 font-mono text-[0.6rem] uppercase tracking-widest text-signal"><span className="h-1.5 w-1.5 rounded-full bg-signal" />{free ? "Free Mode" : `${keys[0]?.provider} connected`}</span>
-        {onMore && <button onClick={onMore} className="font-mono text-[0.58rem] uppercase tracking-widest text-muted-foreground hover:text-signal">manage</button>}
+        <span className="flex items-center gap-1.5 font-mono text-[0.6rem] uppercase tracking-widest text-signal"><span className="h-1.5 w-1.5 rounded-full bg-signal" />Free Mode · no key needed</span>
+        {onMore && <button onClick={onMore} className="font-mono text-[0.58rem] uppercase tracking-widest text-muted-foreground transition-colors hover:text-signal">manage</button>}
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-2.5 text-foreground/70">
         {["openrouter", "anthropic", "openai", "xai", "google", "deepseek", "meta", "mistral", "qwen", "groq"].map((b) => <span key={b} title={b} className="opacity-55 transition-opacity hover:opacity-100"><Brand brand={b} size={16} /></span>)}
       </div>
       <div className="mt-2.5 flex items-center gap-2 rounded-lg border border-border bg-[#0d0d10] p-1 focus-within:border-signal/40">
-        <input value={input} onChange={(e) => setInput(e.target.value)} type="password" placeholder="paste a key for the top models…" className="min-w-0 flex-1 bg-transparent px-2 py-1 font-mono text-[0.76rem] outline-none placeholder:text-muted-foreground/50" />
-        <button onClick={save} disabled={!input.trim()} className="rounded-md bg-signal/15 px-2.5 py-1 font-mono text-[0.66rem] uppercase tracking-widest text-signal transition-colors hover:bg-signal/25 disabled:opacity-40">add</button>
+        <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") save(); }} type="password" placeholder="paste a key for the top models…" className="min-w-0 flex-1 bg-transparent px-2 py-1 font-mono text-[0.76rem] outline-none placeholder:text-muted-foreground/50" />
+        <button onClick={save} disabled={!input.trim()} className="rounded-md bg-signal/15 px-2.5 py-1 font-mono text-[0.66rem] uppercase tracking-widest text-signal transition-colors hover:bg-signal/25 disabled:opacity-40">connect</button>
       </div>
       {err && <div className="mt-1.5 font-mono text-[0.68rem] text-[#ff5a5a]">{err}</div>}
       <div className="mt-1.5 text-[0.7rem] leading-snug text-muted-foreground">encrypted in your browser, sent only to the provider — or just keep Free Mode.</div>

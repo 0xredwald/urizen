@@ -87,7 +87,7 @@ export function TerminalShell() {
   const [status, setStatus] = useState("");
   const [pendingTrade, setPendingTrade] = useState<ProposedTrade | null>(null);
   const [keyOpen, setKeyOpen] = useState(false);
-  const [panels, setPanels] = useState<string[]>(["news", "gainers", "losers"]);
+  const [panels, setPanels] = useState<string[]>([]); // clean by default — open pop-ups on demand
   const [expanded, setExpanded] = useState<string | null>(null);
   const { address } = useAccount();
 
@@ -360,8 +360,8 @@ export function TerminalShell() {
           </Pane>
         </div>
 
-        {/* CENTER: performance + add-bar (top) + big chart + panel strip */}
-        <div className="grid min-h-0 grid-rows-[auto_auto_1fr_auto] gap-2">
+        {/* CENTER: performance + add-bar (top) + a big chart. Panels open as floating pop-ups. */}
+        <div className="grid min-h-0 grid-rows-[auto_auto_1fr] gap-2">
           <Pane n={3} title={`Performance · ${selected}`} right={<a href={`https://robinhoodchain.blockscout.com/token/${sel?.address}`} target="_blank" rel="noreferrer" className="font-mono text-[0.6rem] text-muted-foreground hover:text-signal">contract ↗</a>}>
             <div className="flex flex-wrap items-center gap-x-6 gap-y-1 px-4 py-2.5">
               <div className="flex items-center gap-3">
@@ -397,20 +397,16 @@ export function TerminalShell() {
           } bodyClass="p-0">
             <ChartWorkspace charts={charts} activeId={activeId} range={range} onFocus={setActiveId} onClose={closeChart} onHandle={(id, h) => { handlesRef.current[id] = h; }} />
           </Pane>
-
-          {/* panels — a visible horizontal strip at the bottom (scroll sideways for more) */}
-          {panels.length > 0 && (
-            <div className="flex h-[218px] shrink-0 gap-2 overflow-x-auto pb-0.5">
-              {panels.map((id) => { const p = ALL_PANELS.find((x) => x.id === id); if (!p) return null;
-                return <div key={id} className="h-full w-[336px] shrink-0"><Pane title={p.title} className="h-full" onClose={() => closePanel(id)} onExpand={() => setExpanded(id)}>{renderPanelBody(id)}</Pane></div>; })}
-            </div>
-          )}
         </div>
 
         {/* RIGHT: the terminal agent */}
         <HorizonRail selected={selected} messages={messages} busy={busy} status={status} onAsk={ask}
           pendingTrade={pendingTrade} taker={address ?? null} onClearTrade={() => setPendingTrade(null)} onSettings={() => setKeyOpen(true)} />
       </div>
+
+      {/* floating panels — draggable/resizable pop-ups over the chart (user + agent open these) */}
+      {panels.map((id, i) => { const p = ALL_PANELS.find((x) => x.id === id); if (!p) return null;
+        return <FloatingPanel key={id} title={p.title} index={i} onClose={() => closePanel(id)} onExpand={() => setExpanded(id)}>{renderPanelBody(id)}</FloatingPanel>; })}
 
       {/* ── bottom status bar ── */}
       <footer className="relative z-10 flex h-7 shrink-0 items-center gap-4 border-t border-border bg-[#0a0a0b]/90 px-4 font-mono text-[0.62rem] text-muted-foreground">
@@ -428,6 +424,33 @@ export function TerminalShell() {
 
 function Empty({ children }: { children: React.ReactNode }) {
   return <div className="grid h-full place-items-center font-mono text-[0.7rem] uppercase tracking-widest text-muted-foreground/50">{children}</div>;
+}
+
+// A draggable, resizable floating pop-up panel — clicked/added panels open as these over the chart.
+let FLOAT_Z = 60;
+function FloatingPanel({ title, index, onClose, onExpand, children }: { title: string; index: number; onClose: () => void; onExpand?: () => void; children: React.ReactNode }) {
+  const [pos, setPos] = useState(() => ({ x: 320 + (index % 3) * 40 + index * 8, y: 140 + (index % 4) * 34 + index * 4 }));
+  const [z, setZ] = useState(() => ++FLOAT_Z);
+  const drag = useRef<{ dx: number; dy: number } | null>(null);
+  const focus = () => setZ(++FLOAT_Z);
+  const onDown = (e: React.PointerEvent) => { focus(); drag.current = { dx: e.clientX - pos.x, dy: e.clientY - pos.y }; (e.currentTarget as Element).setPointerCapture(e.pointerId); };
+  const onMove = (e: React.PointerEvent) => { if (!drag.current) return; setPos({ x: Math.max(4, e.clientX - drag.current.dx), y: Math.max(56, e.clientY - drag.current.dy) }); };
+  const onUp = (e: React.PointerEvent) => { drag.current = null; try { (e.currentTarget as Element).releasePointerCapture(e.pointerId); } catch { /* */ } };
+  return (
+    <div onPointerDown={focus}
+      style={{ left: pos.x, top: pos.y, width: 400, height: 340, minWidth: 260, minHeight: 190, maxWidth: "92vw", zIndex: z, resize: "both" }}
+      className="fixed z-30 flex flex-col overflow-hidden rounded-lg border border-signal/25 bg-[#0b0b0d]/95 shadow-2xl backdrop-blur-md">
+      <header onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp}
+        className="flex h-8 shrink-0 cursor-grab items-center justify-between border-b border-border px-3 active:cursor-grabbing">
+        <span className="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-muted-foreground">⠿ {title}</span>
+        <div className="flex items-center gap-2">
+          {onExpand && <button onClick={onExpand} title="expand" className="font-mono text-[0.8rem] leading-none text-muted-foreground/50 transition-colors hover:text-signal">⤢</button>}
+          <button onClick={onClose} title="close" className="font-mono text-[0.85rem] leading-none text-muted-foreground/50 transition-colors hover:text-[#ff5a5a]">×</button>
+        </div>
+      </header>
+      <div className="min-h-0 flex-1 overflow-auto">{children}</div>
+    </div>
+  );
 }
 
 
@@ -509,7 +532,6 @@ function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrade, ta
   return (
     <Pane n={7} title="Agent" right={
       <div className="flex items-center gap-2">
-        {busy && <span className="font-mono text-[0.58rem] uppercase tracking-widest text-signal">working…</span>}
         <button onClick={onSettings} title="Connect intelligence / API key" className="grid h-6 w-6 place-items-center rounded-md border border-border text-muted-foreground transition-colors hover:border-signal/50 hover:bg-signal/10 hover:text-signal">
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
         </button>
