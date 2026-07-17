@@ -1,4 +1,4 @@
-import { analyzeStock, PRICES, type Depth } from "@/lib/x402-analysis";
+import { analyzeStock, analyzeMarket, PRICES, type Depth } from "@/lib/x402-analysis";
 import { gatePayment, x402Enabled } from "@/lib/x402-gate";
 import { bySymbol } from "@/lib/stocks";
 
@@ -36,7 +36,7 @@ function manifest() {
     description: "A synthesized equity thesis fusing technicals, SEC fundamentals, analyst consensus, macro, prediction-market odds and on-chain price via an LLM analyst panel. One call, real data.",
     resource: RESOURCE,
     method: "GET",
-    params: { ticker: "stock symbol, e.g. NVDA", depth: "snapshot | standard | deep (default deep)" },
+    params: { ticker: "stock symbol (e.g. NVDA) or MARKET for whole-market sentiment", depth: "snapshot | standard | deep (default deep)" },
     pricing: { snapshot: PRICES.snapshot, standard: PRICES.standard, deep: PRICES.deep, unit: "USDC per call (x402)" },
     tiers: {
       snapshot: "3-4 sentence directional read",
@@ -66,10 +66,14 @@ async function handle(req: Request) {
     return cors({ error: "x402 payments aren't switched on yet — this endpoint isn't publicly available." }, { status: 402 });
   }
 
-  if (!bySymbol(ticker)) return cors({ error: `unknown ticker ${ticker}. Supported: the tokenized-stock universe on Robinhood Chain.` }, { status: 400 });
+  // "MARKET" is the whole-market sentiment read; otherwise it must be a known tokenized stock
+  const isMarket = ticker === "MARKET";
+  if (!isMarket && !bySymbol(ticker)) return cors({ error: `unknown ticker ${ticker}. Supported: MARKET, or the tokenized-stock universe on Robinhood Chain.` }, { status: 400 });
 
   try {
-    const report = await analyzeStock(ticker, depth, new Date().toISOString());
+    const report = isMarket
+      ? await analyzeMarket(depth, new Date().toISOString())
+      : await analyzeStock(ticker, depth, new Date().toISOString());
     const headers: Record<string, string> = {};
     if (gate.mode === "paid" && gate.txHash) headers["payment-response"] = Buffer.from(JSON.stringify({ success: true, txHash: gate.txHash, payer: gate.payer })).toString("base64");
     return cors({ ...report, paid: gate.mode === "paid" }, { headers });

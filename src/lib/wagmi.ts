@@ -1,5 +1,6 @@
 import { getDefaultConfig } from "@rainbow-me/rainbowkit";
 import { defineChain } from "viem";
+import { base } from "viem/chains";
 
 // Robinhood Chain (4663) as a first-class wagmi chain — proper id, RPC, native currency + explorer.
 export const robinhoodChain = defineChain({
@@ -17,6 +18,6 @@ const projectId = process.env.NEXT_PUBLIC_WC_PROJECT_ID || "urizen_alpha_default
 export const wagmiConfig = getDefaultConfig({
   appName: "Urizen",
   projectId,
-  chains: [robinhoodChain],
+  chains: [robinhoodChain, base], // Base is needed to sign x402 (USDC) payments
   ssr: true,
 });
