@@ -95,6 +95,18 @@ export function Docs() {
 }`} />
           </Section>
 
+          <Section id="x402" kicker="Pay per call" title="Paid analysis (x402)">
+            <Endpoint method="GET" path="/api/x402/analyze" desc="A synthesized equity thesis from a four-analyst panel (technical, fundamental, macro & catalyst, news-flow & on-chain) plus a portfolio-manager synthesis, over real data. Payable per call via x402 (HTTP 402, USDC on Base, EIP-3009 — gasless for the payer). Unpaid requests return the 402 challenge; the manifest (no ticker) returns pricing. Try it at /x402."
+              params={[["ticker", "stock symbol e.g. NVDA, or MARKET for whole-market sentiment (required)"], ["depth", "snapshot ($0.01) · standard ($0.10) · deep ($0.50), default deep"]]}
+              resp={`{
+  "ticker": "NVDA", "name": "NVIDIA", "depth": "deep",
+  "data": { "technicals": "…", "fundamentals": "…", "ratings": "…" },
+  "agents": { "technical": "…", "fundamental": "…", "macro": "…", "flow": "…" },
+  "thesis": "CALL — … THE CASE — … THE BEAR CASE — … WHAT WOULD CHANGE MY MIND — …",
+  "paid": true
+}`} />
+          </Section>
+
           <Section id="trading" kicker="Act" title="Trading">
             <Endpoint method="GET" path="/api/rialto/quote" desc="Best-route swap quote for tokenized stocks on Robinhood Chain (id 4663), returning a ready-to-sign transaction. The routing key is attached server-side; never exposed to the browser. Non-custodial — the user sends the tx from their own wallet. Cash leg is USDG."
               params={[["sell_token", "symbol or address (required)"], ["buy_token", "symbol or address (required)"], ["sell_amount", "human decimal, e.g. 100 (required)"], ["taker", "recipient wallet (required)"], ["slippage_bps", "max slippage, default 100 (1%)"]]}

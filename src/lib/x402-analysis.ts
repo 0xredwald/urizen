@@ -179,3 +179,71 @@ export async function analyzeStock(rawTicker: string, depth: Depth, stampIso: st
 
   return { ticker, name, depth, generatedAt: stampIso, data, agents: { technical, fundamental, macro: macroTake, flow }, thesis, disclaimer };
 }
+
+// — whole-market sentiment: the same panel, aimed at the tape instead of one name —
+export async function analyzeMarket(depth: Depth, stampIso: string): Promise<AnalysisReport> {
+  const B = apiBase();
+  const [market, movers, macro, preds, news] = await Promise.all([
+    j(`${B}/api/quant/market`),
+    j(`${B}/api/quant/movers`),
+    j(`${B}/api/quant/macro`),
+    j(`${B}/api/quant/predictions?q=${encodeURIComponent("stock market Fed rates recession")}`),
+    j(`${B}/api/quant/news?symbol=SPY`),
+  ]);
+
+  const idx = ((market?.items || []) as { label: string; price: number; changePct: number }[])
+    .map((m) => `${m.label} ${m.price.toLocaleString(undefined, { maximumFractionDigits: 2 })} (${m.changePct >= 0 ? "+" : ""}${m.changePct.toFixed(2)}%)`).join(", ") || "no index data";
+  const g = (movers?.gainers || []) as { symbol: string; changePct: number }[];
+  const l = (movers?.losers || []) as { symbol: string; changePct: number }[];
+  const session = movers?.session ? ` [${movers.session}]` : "";
+  const moversLine = (g.length || l.length)
+    ? `Leaders: ${g.slice(0, 4).map((m) => `${m.symbol} +${m.changePct.toFixed(1)}%`).join(", ")}. Laggards: ${l.slice(0, 4).map((m) => `${m.symbol} ${m.changePct.toFixed(1)}%`).join(", ")}`
+    : "no movers data";
+
+  const data = {
+    technicals: `Indices${session}: ${idx}`,
+    fundamentals: moversLine,
+    ratings: "n/a — market-wide view",
+    news: newsLines(news),
+    macro: macroLine(macro),
+    predictions: predLines(preds),
+    onchainUsd: null,
+  };
+
+  const dataBlock =
+    `SCOPE: US equity market (tokenized on Robinhood Chain)\n` +
+    `INDICES${session}: ${idx}\n` +
+    `BREADTH / MOVERS: ${moversLine}\n` +
+    `MACRO BACKDROP: ${data.macro}\n` +
+    `PREDICTION MARKETS:\n${data.predictions}\n` +
+    `MARKET NEWS:\n${data.news}`;
+
+  const disclaimer = "Synthesized from real data by Urizen. Speculative; can lose value. Not investment advice.";
+
+  if (depth === "snapshot") {
+    const thesis = await llm(
+      "You are a sharp macro strategist. In 3-4 sentences, give a clear read on the overall US market from the data: the tape, the one macro thing that matters most, and a risk-on / neutral / risk-off lean with conviction. No hedging boilerplate.",
+      dataBlock);
+    return { ticker: "MARKET", name: "US Market", depth, generatedAt: stampIso, data, thesis, disclaimer };
+  }
+  if (depth === "standard") {
+    const thesis = await llm(
+      "You are a macro strategist writing a concise market note. Using ONLY the data: (1) TAPE — one-line call (Risk-on/Neutral/Risk-off) + conviction; (2) BREADTH — what the movers say; (3) MACRO & RISKS — rates, calendar, odds; (4) WHAT TO WATCH — dated catalysts. Specific with numbers, no boilerplate.",
+      dataBlock);
+    return { ticker: "MARKET", name: "US Market", depth, generatedAt: stampIso, data, thesis, disclaimer };
+  }
+
+  const [tape, macroTake, catalysts, sentiment] = await Promise.all([
+    llm("You are a market-breadth & tape analyst. From the index levels/changes and the leaders vs laggards, read risk appetite, breadth and rotation. 3-4 sentences, specific.", `INDICES: ${idx}\nMOVERS: ${moversLine}`),
+    llm("You are a rates & macro strategist. From the macro backdrop (rates, dollar, calendar), read the macro regime and its pressure on equities. 3-4 sentences.", `MACRO: ${data.macro}`),
+    llm("You are a catalyst strategist. From the economic calendar and prediction-market odds, name the top near-term dated catalysts for the market and the odds where they matter. 3-4 sentences.", `MACRO: ${data.macro}\nPREDICTION MARKETS:\n${data.predictions}`),
+    llm("You are a news-flow & sentiment analyst. From the market headlines, read the prevailing narrative and sentiment (fear/greed). 3-4 sentences.", `MARKET NEWS:\n${data.news}`),
+  ]);
+
+  const thesis = await llm(
+    "You are the chief strategist. Four analysts gave the reads below on the overall market. Synthesize a decisive note: (1) CALL — Risk-on/Neutral/Risk-off + conviction (low/med/high) + rough horizon; (2) THE CASE — 2-3 strongest points; (3) THE OTHER SIDE — the strongest counter; (4) WHAT WOULD CHANGE YOUR MIND — 1-2 measurable triggers. Reconcile disagreement explicitly. Decisive, specific, no boilerplate.",
+    `TAPE & BREADTH:\n${tape}\n\nRATES & MACRO:\n${macroTake}\n\nCATALYSTS:\n${catalysts}\n\nNEWS-FLOW & SENTIMENT:\n${sentiment}`,
+    synthModel());
+
+  return { ticker: "MARKET", name: "US Market", depth, generatedAt: stampIso, data, agents: { technical: tape, fundamental: macroTake, macro: catalysts, flow: sentiment }, thesis, disclaimer };
+}

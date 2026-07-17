@@ -1,0 +1,37 @@
+# Urizen
+
+> The first autonomous AI equity fund + research desk on Robinhood Chain (id 4663). Tokenized US
+> stocks and ETFs trade on-chain against the real companies (NVDA, the Mag 7, SPY/QQQ). Every read is
+> grounded in real data — technicals, SEC filings, analyst consensus, macro, prediction markets, on-chain.
+
+## x402 — paid equity analysis for AI agents
+
+A per-call endpoint that returns a synthesized equity thesis from a four-analyst panel (technical,
+fundamental, macro & catalyst, news-flow & on-chain) plus a portfolio-manager synthesis. Payable per
+call via x402 (HTTP 402, USDC on Base, EIP-3009 — gasless for the payer).
+
+- Endpoint: `GET https://urizenfund.com/api/x402/analyze`
+- Params: `ticker` (e.g. `NVDA`, or `MARKET` for whole-market sentiment), `depth` = `snapshot` | `standard` | `deep` (default `deep`)
+- Pricing (USDC on Base): snapshot `$0.01`, standard `$0.10`, deep `$0.50`
+- Discovery: `GET https://urizenfund.com/api/x402/analyze` (no ticker) returns the manifest + pricing
+- Human/agent test page: https://urizenfund.com/x402
+
+## Keyless research routes (free, no payment)
+
+- `GET /api/quant/ohlc?symbol=NVDA&range=1m` — price candles
+- `GET /api/quant/market` — indices, VIX, rates
+- `GET /api/quant/movers` — top gainers/losers across the tokenized universe (+ session)
+- `GET /api/quant/news?symbol=NVDA` — recent headlines
+- `GET /api/quant/fundamentals?symbol=NVDA` — SEC financials
+- `GET /api/quant/filings?symbol=NVDA` — filings + insider activity
+- `GET /api/quant/ratings?symbol=NVDA` — analyst consensus
+- `GET /api/quant/macro` — rate levels + the economic calendar
+- `GET /api/quant/predictions?q=Fed%20decision` — live Polymarket odds
+- `GET /api/quant/onchain?symbol=URI` — on-chain price + liquidity
+
+## Links
+
+- Site: https://urizenfund.com
+- Urizen Alpha (research desk): https://urizenfund.com/alpha
+- Docs: https://urizenfund.com/docs
+- Source: https://github.com/0xredwald/urizen
