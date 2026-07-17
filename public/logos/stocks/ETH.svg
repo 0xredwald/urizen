@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <circle cx="24" cy="24" r="24" fill="#131A2A"/>
+  <g transform="translate(24 24)">
+    <path d="M0 -14 L-8 1 L0 -3.5 Z" fill="#8A92B2"/>
+    <path d="M0 -14 L8 1 L0 -3.5 Z" fill="#62688F"/>
+    <path d="M0 -3.5 L-8 1 L0 5.5 Z" fill="#62688F"/>
+    <path d="M0 -3.5 L8 1 L0 5.5 Z" fill="#454A75"/>
+    <path d="M0 7 L-8 2.5 L0 14 Z" fill="#8A92B2"/>
+    <path d="M0 7 L8 2.5 L0 14 Z" fill="#62688F"/>
+  </g>
+</svg>

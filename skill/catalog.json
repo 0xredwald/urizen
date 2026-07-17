@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "slug": "urizen",
+  "provider": "URIZEN",
+  "name": "URIZEN",
+  "description": "Price, buy, hold and mirror $URI — the first autonomous fund on Robinhood Chain, allocating across tokenized stocks, RWAs and crypto 24/7.",
+  "homepage": "https://urizen.fund",
+  "manifest": "https://urizen.fund/api/skill",
+  "emoji": "▚",
+  "tags": ["fund", "robinhood-chain", "tokenized-stocks", "rwa", "autonomous", "agent"],
+  "token": {
+    "symbol": "URI",
+    "address": "0x970078468807853bc316432e745165eb34398ba3",
+    "chainId": 4663
+  },
+  "install": {
+    "type": "external",
+    "note": "Read-only capabilities are live at https://urizen.fund/api/*. PR to BankrBot/skills to publish."
+  }
+}

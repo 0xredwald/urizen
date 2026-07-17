@@ -1,0 +1,6 @@
+{
+  "crons": [
+    { "path": "/api/telegram/fund-watch", "schedule": "*/5 * * * *" },
+    { "path": "/api/telegram/digest", "schedule": "10 20,21 * * 1-5" }
+  ]
+}
