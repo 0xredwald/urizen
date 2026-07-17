@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useWalletClient, useChainId, useSwitchChain } from "wagmi";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
-import { wrapFetchWithPayment } from "x402-fetch";
+import { createPaymentHeader, selectPaymentRequirements } from "x402/client";
+import { PaymentRequirementsSchema, ChainIdToNetwork } from "x402/types";
 import { publicActions } from "viem";
 import { base } from "viem/chains";
 import { UrizenMark } from "@/components/brand/marks";
@@ -77,18 +78,36 @@ export default function X402Desk() {
   const run = async () => {
     if (!walletClient || busy) return;
     setReport(null); setMsg(""); setPhase("run");
+    const url = `/api/x402/analyze?ticker=${encodeURIComponent(query)}&depth=${depth}`;
     try {
       if (chainId !== base.id) { setMsg("Switch to Base in your wallet…"); await switchChainAsync({ chainId: base.id }); }
-      setMsg("Confirm the payment in your wallet…");
-      const signer = walletClient.extend(publicActions);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const pay = wrapFetchWithPayment(fetch, signer as any, BigInt(1_000_000));
+      const signer = walletClient.extend(publicActions) as any;
 
-      // paid → choreograph the pipeline (5 nodes) while the request is in flight
+      // 1) ask the endpoint for the price — a cheap 402 challenge, no signature, no analysis yet
+      setMsg("Preparing…");
+      const first = await fetch(url);
+      if (first.status !== 200 && first.status !== 402) {
+        const b = await first.json().catch(() => ({})); setPhase("error"); setMsg(b?.error || `HTTP ${first.status}`); return;
+      }
+      if (first.status === 200) { setReport(await first.json()); setPhase("done"); return; } // payments off → served directly
+      const { x402Version, accepts } = await first.json();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const parsed = accepts.map((a: any) => PaymentRequirementsSchema.parse(a));
+      const selected = selectPaymentRequirements(parsed, ChainIdToNetwork[base.id], "exact");
+      if (BigInt(selected.maxAmountRequired) > BigInt(1_000_000)) throw new Error("Payment exceeds the $1 cap");
+
+      // 2) SIGN — this opens the wallet. Nothing animates until the user actually signs.
+      setMsg("Confirm the payment in your wallet…");
+      const paymentHeader = await createPaymentHeader(signer, x402Version, selected);
+
+      // 3) signed → NOW start the pipeline animation while the server does the real work
       setPhase("synth"); setActive(0);
-      const step = depth === "deep" ? 2800 : depth === "standard" ? 1500 : 900;
-      for (let i = 1; i <= AGENTS.length; i++) timers.current.push(setTimeout(() => setActive(i), i * step));
-      const res = await pay(`/api/x402/analyze?ticker=${encodeURIComponent(query)}&depth=${depth}`);
+      const stepMs = depth === "deep" ? 2800 : depth === "standard" ? 1500 : 900;
+      for (let i = 1; i <= AGENTS.length; i++) timers.current.push(setTimeout(() => setActive(i), i * stepMs));
+
+      // 4) the paid request — carries the signed authorization; server verifies, settles, analyses
+      const res = await fetch(url, { headers: { "X-PAYMENT": paymentHeader, "Access-Control-Expose-Headers": "X-PAYMENT-RESPONSE" } });
       const body = await res.json();
       clearTimers();
       if (res.status !== 200) {
@@ -99,7 +118,7 @@ export default function X402Desk() {
       setReport(body); setPhase("done");
     } catch (e) {
       clearTimers(); setPhase("error");
-      setMsg(((e as Error)?.message || String(e)).split("\n")[0]);
+      setMsg(((e as Error)?.message || String(e)).split("\n")[0].replace(/^Error:\s*/, ""));
     }
   };
 
