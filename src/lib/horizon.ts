@@ -9,6 +9,7 @@ import { getActiveBinding, FREE_MODEL } from "./agents";
 
 export type HAction =
   | { tool: "selectSymbol"; symbol: string }
+  | { tool: "openChart"; symbol: string }
   | { tool: "setTimeframe"; range: "1m" | "3m" | "6m" | "1y" }
   | { tool: "addIndicator"; name: "MA" | "EMA" | "BOLL" | "RSI" | "MACD" | "KDJ" | "VOL" }
   | { tool: "clearIndicators" }
@@ -33,7 +34,7 @@ function systemPrompt(ctx: HorizonCtx): string {
     "Respond with ONLY minified JSON (no markdown fences):",
     `{"say": string (1-3 crisp sentences, lowercase-ok, what you see + what you're doing), "actions": HAction[]}`,
     "HAction is one of:",
-    `{"tool":"selectSymbol","symbol":"TSLA"} · {"tool":"setTimeframe","range":"1m|3m|6m|1y"}`,
+    `{"tool":"selectSymbol","symbol":"TSLA"} (retarget the active chart) · {"tool":"openChart","symbol":"TSLA"} (open a NEW chart, up to 4 — a playground) · {"tool":"setTimeframe","range":"1m|3m|6m|1y"}`,
     `{"tool":"addIndicator","name":"MA|EMA|BOLL|RSI|MACD|KDJ|VOL"} · {"tool":"clearIndicators"}`,
     `{"tool":"drawTrendline","from":{"t":<unix_sec>,"price":<n>},"to":{"t":<unix_sec>,"price":<n>},"label":"uptrend"}`,
     `{"tool":"drawHLine","price":<n>,"label":"support"} · {"tool":"marker","t":<unix_sec>,"price":<n>,"text":"breakout"}`,

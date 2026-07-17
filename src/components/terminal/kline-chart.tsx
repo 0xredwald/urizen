@@ -34,12 +34,13 @@ const styles = {
       last: { upColor: SIGNAL, downColor: RED, line: { style: "dashed", dashedValue: [3, 3] }, text: { color: "#04140a" } },
       high: { color: "#8a8a8f" }, low: { color: "#8a8a8f" },
     },
-    tooltip: { legend: { color: "#f2f1ec" }, rect: { color: "rgba(10,10,11,0.9)", borderColor: "rgba(242,241,236,0.1)" } },
+    // OHLC legend only on crosshair hover — keeps small multi-chart panels clean
+    tooltip: { showRule: "follow_cross", legend: { color: "#f2f1ec" }, rect: { color: "rgba(10,10,11,0.9)", borderColor: "rgba(242,241,236,0.1)" } },
   },
   indicator: {
     lines: [{ color: SIGNAL }, { color: "#7aa2ff" }, { color: "#f0a500" }, { color: "#c678dd" }],
     bars: [{ upColor: "rgba(52,240,3,0.5)", downColor: "rgba(255,90,90,0.5)", noChangeColor: "#8a8a8f" }],
-    tooltip: { text: { color: "#8a8a8f" } },
+    tooltip: { showRule: "follow_cross", text: { color: "#8a8a8f" } },
   },
   xAxis: { axisLine: { color: "rgba(242,241,236,0.1)" }, tickLine: { color: "rgba(242,241,236,0.1)" }, tickText: { color: "#8a8a8f", size: 10 } },
   yAxis: { axisLine: { color: "rgba(242,241,236,0.1)" }, tickLine: { color: "rgba(242,241,236,0.1)" }, tickText: { color: "#8a8a8f", size: 10 } },

@@ -2,8 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
-import { KlineChart, type ChartHandle } from "@/components/terminal/kline-chart";
+import { useAccount } from "wagmi";
+import { type ChartHandle } from "@/components/terminal/kline-chart";
 import { HorizonCursor, type CursorHandle } from "@/components/terminal/horizon-cursor";
+import { TradeTicket, type ProposedTrade } from "@/components/terminal/trade-ticket";
+import { ChartWorkspace } from "@/components/terminal/chart-workspace";
 import { AncientOfDays } from "@/components/quant/ancient-of-days";
 import { UrizenMark } from "@/components/brand/marks";
 import { STOCKS } from "@/lib/stocks";
@@ -48,7 +51,9 @@ function Pane({ n, title, right, children, className = "", bodyClass = "" }: { n
 }
 
 export function TerminalShell() {
-  const [selected, setSelected] = useState("NVDA");
+  const [charts, setCharts] = useState<{ id: string; symbol: string }[]>([{ id: "c1", symbol: "NVDA" }]);
+  const [activeId, setActiveId] = useState("c1");
+  const cidRef = useRef(1);
   const [range, setRange] = useState<Range>("3m");
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [gainers, setGainers] = useState<Mover[]>([]);
@@ -56,14 +61,35 @@ export function TerminalShell() {
   const [session, setSession] = useState("");
   const [candles, setCandles] = useState<Candle[]>([]);
   const [head, setHead] = useState<{ price: number; prevClose: number } | null>(null);
-  const [loadingChart, setLoadingChart] = useState(false);
   const [indices, setIndices] = useState<{ label: string; changePct: number; price: number }[]>([]);
   const [watch, setWatch] = useState<string[]>([]);
-  const chartRef = useRef<ChartHandle>(null);
+  const handlesRef = useRef<Record<string, ChartHandle | null>>({});
   const cursorRef = useRef<CursorHandle>(null);
   const [messages, setMessages] = useState<HMsg[]>([]);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
+  const [pendingTrade, setPendingTrade] = useState<ProposedTrade | null>(null);
+  const { address } = useAccount();
+
+  // the active chart drives the header / trade / agent grounding; setSelected retargets it
+  const activeChart = charts.find((c) => c.id === activeId) ?? charts[0];
+  const selected = activeChart?.symbol ?? "NVDA";
+  const setSelected = (sym: string) => setCharts((cs) => cs.map((c) => (c.id === activeId ? { ...c, symbol: sym } : c)));
+  const activeHandle = () => handlesRef.current[activeId] ?? null;
+  const openChart = (sym: string) => {
+    if (charts.length >= 4) { setSelected(sym); return; }
+    const id = `c${++cidRef.current}`;
+    setCharts((cs) => [...cs, { id, symbol: sym }]);
+    setActiveId(id);
+  };
+  const addNextChart = () => { const open = new Set(charts.map((c) => c.symbol)); openChart(STOCKS.find((s) => !open.has(s.symbol))?.symbol || "SPY"); };
+  const closeChart = (id: string) => setCharts((cs) => {
+    if (cs.length <= 1) return cs;
+    const next = cs.filter((c) => c.id !== id);
+    if (id === activeId) setActiveId(next[0].id);
+    delete handlesRef.current[id];
+    return next;
+  });
 
   useEffect(() => { unlockVault(); }, []); // decrypt the BYOK vault so Horizon can reach a key
 
@@ -71,10 +97,12 @@ export function TerminalShell() {
 
   // execute the agent's actions on the terminal, moving the visible cursor as it goes
   const dispatch = async (actions: HAction[]) => {
-    const cur = cursorRef.current, chart = chartRef.current;
+    const cur = cursorRef.current;
     for (const a of actions) {
+      const chart = activeHandle();
       try {
         if (a.tool === "selectSymbol") { setStatus(`opening ${a.symbol}…`); setSelected(a.symbol); await wait(900); }
+        else if (a.tool === "openChart") { setStatus(`opening a ${a.symbol} chart…`); openChart(a.symbol); await wait(1000); }
         else if (a.tool === "setTimeframe") { setStatus(`${a.range} view`); setRange(a.range); await wait(600); }
         else if (a.tool === "addIndicator") { setStatus(`adding ${a.name}`); chart?.addIndicator(a.name); await wait(500); }
         else if (a.tool === "clearIndicators") { chart?.removeIndicators(); await wait(300); }
@@ -105,8 +133,9 @@ export function TerminalShell() {
           setMessages((m) => [...m, { role: "assistant", content: items ? `headlines on ${sym}:\n${items}` : `no fresh headlines on ${sym}.` }]);
           await wait(300);
         } else if (a.tool === "proposeTrade") {
-          setMessages((m) => [...m, { role: "assistant", content: `⚑ proposed: ${a.side} $${a.amount} of ${a.symbol} — wallet signing arrives in the trades pass.` }]);
-          await wait(250);
+          setStatus(`preparing ${a.side} ${a.symbol}…`);
+          setPendingTrade({ side: a.side, symbol: a.symbol, amount: a.amount, note: `Horizon suggests ${a.side === "buy" ? "buying" : "selling"} ${a.symbol}.` });
+          await wait(300);
         }
       } catch { /* one bad action shouldn't kill the sequence */ }
     }
@@ -119,6 +148,14 @@ export function TerminalShell() {
     const userMsg: HMsg = { role: "user", content: t };
     setMessages((m) => [...m, userMsg]);
     setBusy(true); setStatus("reading the tape…");
+    // /buy|/sell SYM AMT — raise a trade ticket directly (keyless test of the wallet flow)
+    const tc = t.match(/^\/(buy|sell)\s+([A-Za-z]+)\s+([\d.]+)/i);
+    if (tc) {
+      setBusy(false); setStatus("");
+      setMessages((m) => [...m, { role: "assistant", content: `raising a ${tc[1].toLowerCase()} ticket for ${tc[2].toUpperCase()}.` }]);
+      setPendingTrade({ side: tc[1].toLowerCase() as "buy" | "sell", symbol: tc[2].toUpperCase(), amount: parseFloat(tc[3]), note: "manual ticket" });
+      return;
+    }
     // /demo — a keyless preview of Horizon operating the chart, built from the REAL loaded candles
     if (t.toLowerCase() === "/demo") {
       try {
@@ -176,12 +213,13 @@ export function TerminalShell() {
 
   // chart for the selected instrument
   useEffect(() => {
-    let on = true; setLoadingChart(true);
+    let on = true;
+    // the active symbol's candles power the performance header + Horizon's grounding
     fetch(`/api/quant/ohlc?symbol=${encodeURIComponent(selected)}&range=${range}`).then((r) => r.json()).then((d) => {
       if (!on) return;
       setCandles(d?.candles || []);
       setHead(d?.price != null ? { price: d.price, prevClose: d.prevClose } : null);
-    }).catch(() => {}).finally(() => on && setLoadingChart(false));
+    }).catch(() => {});
     return () => { on = false; };
   }, [selected, range]);
 
@@ -273,15 +311,13 @@ export function TerminalShell() {
             </div>
           </Pane>
 
-          <Pane n={4} title={`Chart · ${selected}`} right={
+          <Pane n={4} title={charts.length > 1 ? `Charts · ${charts.length}` : `Chart · ${selected}`} right={
             <div className="flex items-center gap-1">
               {RANGES.map((r) => <button key={r} onClick={() => setRange(r)} className={`rounded px-1.5 py-0.5 font-mono text-[0.6rem] uppercase transition-colors ${range === r ? "bg-signal/15 text-signal" : "text-muted-foreground hover:text-foreground"}`}>{r}</button>)}
+              <button onClick={addNextChart} disabled={charts.length >= 4} title="add a chart" className="ml-1 grid h-4 w-4 place-items-center rounded bg-signal/15 font-mono text-[0.7rem] text-signal transition-colors hover:bg-signal/25 disabled:opacity-30">+</button>
             </div>
-          } bodyClass="relative">
-            <KlineChart ref={chartRef} candles={candles} symbol={selected} />
-            {loadingChart && candles.length === 0 && <div className="absolute inset-0 grid place-items-center font-mono text-[0.7rem] uppercase tracking-widest text-muted-foreground/50">loading tape…</div>}
-            {/* agent drawing + live cursor land in P3 */}
-            <div className="pointer-events-none absolute bottom-1.5 right-3 font-mono text-[0.55rem] uppercase tracking-widest text-muted-foreground/40">agent drawing · P3</div>
+          } bodyClass="p-0">
+            <ChartWorkspace charts={charts} activeId={activeId} range={range} onFocus={setActiveId} onClose={closeChart} onHandle={(id, h) => { handlesRef.current[id] = h; }} />
           </Pane>
 
           <div className="grid min-h-0 grid-cols-2 gap-2">
@@ -291,7 +327,8 @@ export function TerminalShell() {
         </div>
 
         {/* RIGHT: Horizon agent */}
-        <HorizonRail selected={selected} messages={messages} busy={busy} status={status} onAsk={ask} />
+        <HorizonRail selected={selected} messages={messages} busy={busy} status={status} onAsk={ask}
+          pendingTrade={pendingTrade} taker={address ?? null} onClearTrade={() => setPendingTrade(null)} />
       </div>
 
       {/* ── bottom status bar ── */}
@@ -334,7 +371,7 @@ function MoversPane({ n, title, rows, onPick, up }: { n: number; title: string; 
 }
 
 // ── Horizon agent rail — a real chat that operates the terminal ──
-function HorizonRail({ selected, messages, busy, status, onAsk }: { selected: string; messages: HMsg[]; busy: boolean; status: string; onAsk: (t: string) => void }) {
+function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrade, taker, onClearTrade }: { selected: string; messages: HMsg[]; busy: boolean; status: string; onAsk: (t: string) => void; pendingTrade: ProposedTrade | null; taker: string | null; onClearTrade: () => void }) {
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const examples = [
@@ -382,6 +419,11 @@ function HorizonRail({ selected, messages, busy, status, onAsk }: { selected: st
           </div>
         )}
       </div>
+      {pendingTrade && (
+        <div className="shrink-0 border-t border-border p-3 pb-0">
+          <TradeTicket trade={pendingTrade} taker={taker} onClose={onClearTrade} />
+        </div>
+      )}
       <div className="shrink-0 border-t border-border p-3">
         <div className="flex items-end gap-2 rounded-xl border border-border bg-[#0d0d10] p-1.5 focus-within:border-signal/40">
           <textarea value={input} onChange={(e) => setInput(e.target.value)} rows={1} disabled={busy}
