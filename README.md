@@ -41,6 +41,31 @@ An AI equity-research agent in the browser. Ask it anything:
 Bring your own model key — it stays encrypted in your browser and is sent only to your provider,
 never to a Urizen server.
 
+## Skills
+
+The full research toolbelt — invoke any of it in the app or the bot (`/` commands):
+
+**Markets & technicals**
+- `chart` — price chart + technicals (RSI, momentum, volatility regime, Sharpe, trend, key levels)
+- `stats` — a full technical read on a name
+- `screen` — rank the entire tokenized-stock universe
+- `compare` — two names side by side
+- `market` — the pulse: indices, VIX, rates
+- `onchain` — live on-chain price + liquidity
+
+**Fundamentals & sentiment**
+- `fundamentals` — SEC financials (revenue, margins, EPS)
+- `filings` — recent SEC filings + insider activity
+- `ratings` — analyst consensus
+- `news` — the latest headlines
+- `macro` — Fed / CPI + the economic calendar
+- `odds` — live Polymarket prediction-market probabilities
+
+**Build & trade**
+- `strategy` — build bounded, auditable, exportable trading strategies
+- `image` — generate on-brand images
+- non-custodial **swaps** — the agent proposes, you sign in your own wallet
+
 ## Telegram
 
 <p align="center">
