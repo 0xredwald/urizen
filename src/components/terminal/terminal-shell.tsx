@@ -87,9 +87,8 @@ export function TerminalShell() {
   const [status, setStatus] = useState("");
   const [pendingTrade, setPendingTrade] = useState<ProposedTrade | null>(null);
   const [keyOpen, setKeyOpen] = useState(false);
-  const [panels, setPanels] = useState<string[]>([]); // clean by default — open pop-ups on demand
-  const [expanded, setExpanded] = useState<string | null>(null);
-  const { address } = useAccount();
+  const [panels, setPanels] = useState<string[]>([]); // clean by default — summon into the dock on demand
+  const { address, isConnected } = useAccount();
 
   useEffect(() => { try { const s = localStorage.getItem("urizen.terminal.panels"); if (s) setPanels(JSON.parse(s)); } catch { /* noop */ } }, []);
   const persistPanels = (p: string[]) => { setPanels(p); try { localStorage.setItem("urizen.terminal.panels", JSON.stringify(p)); } catch { /* noop */ } };
@@ -291,13 +290,6 @@ export function TerminalShell() {
       {/* the visible agent cursor (fixed overlay) */}
       <HorizonCursor ref={cursorRef} />
       <KeyModal open={keyOpen} onClose={() => setKeyOpen(false)} onChanged={() => {}} />
-      {expanded && (
-        <div className="fixed inset-0 z-[85] grid place-items-center bg-black/70 p-6 backdrop-blur-sm" onClick={() => setExpanded(null)}>
-          <div onClick={(e) => e.stopPropagation()} className="h-[82vh] w-full max-w-5xl">
-            <Pane title={ALL_PANELS.find((x) => x.id === expanded)?.title ?? expanded} className="h-full" onClose={() => setExpanded(null)}>{renderPanelBody(expanded)}</Pane>
-          </div>
-        </div>
-      )}
 
       {/* ── top bar ── */}
       <header className="relative z-40 flex h-[52px] shrink-0 items-center gap-4 border-b border-border bg-[#0a0a0b]/80 px-4 backdrop-blur-md">
@@ -360,58 +352,49 @@ export function TerminalShell() {
           </Pane>
         </div>
 
-        {/* CENTER: performance + add-bar (top) + a big chart. Panels open as floating pop-ups. */}
-        <div className="grid min-h-0 grid-rows-[auto_auto_1fr] gap-2">
-          <Pane n={3} title={`Performance · ${selected}`} right={<a href={`https://robinhoodchain.blockscout.com/token/${sel?.address}`} target="_blank" rel="noreferrer" className="font-mono text-[0.6rem] text-muted-foreground hover:text-signal">contract ↗</a>}>
-            <div className="flex flex-wrap items-center gap-x-6 gap-y-1 px-4 py-2.5">
-              <div className="flex items-center gap-3">
-                <Logo s={selected} size={26} />
-                <div>
-                  <div className="font-display text-lg leading-none">{sel?.name ?? selected}</div>
-                  <div className="font-mono text-[0.62rem] uppercase tracking-widest text-muted-foreground">{selected} · {sel?.kind === "etf" ? "ETF" : "Equity"}</div>
-                </div>
+        {/* CENTER: one big, vanilla chart. Its 44px header carries the instrument, price and tools —
+            no separate performance pane. Secondary panels open in a single unified dock (below). */}
+        <section className="flex min-h-0 flex-col overflow-hidden border border-border bg-[#0b0b0d]/62 backdrop-blur-md">
+          <header className="flex h-11 shrink-0 items-center gap-3 border-b border-border pl-3 pr-2">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <Logo s={selected} size={22} />
+              <div className="flex min-w-0 items-baseline gap-2">
+                <span className="truncate font-display text-[0.95rem] leading-none">{sel?.name ?? selected}</span>
+                <span className="shrink-0 font-mono text-[0.56rem] uppercase tracking-[0.14em] text-muted-foreground/70">{selected}</span>
               </div>
-              <div className="flex items-baseline gap-3">
-                <span className="font-display text-2xl tabular-nums">${head ? fmt(head.price) : (quotes[selected] ? fmt(quotes[selected].price) : "—")}</span>
-                <span className={`font-mono text-sm tabular-nums ${up ? "text-signal" : "text-[#ff5a5a]"}`}>{up ? "▲" : "▼"} {pct(changePct)}</span>
+            </div>
+            <div className="flex items-baseline gap-2">
+              <span className="font-display text-lg leading-none tabular-nums">${head ? fmt(head.price) : (quotes[selected] ? fmt(quotes[selected].price) : "—")}</span>
+              <span className={`font-mono text-[0.78rem] tabular-nums ${up ? "text-signal" : "text-[#ff5a5a]"}`}>{up ? "▲" : "▼"} {pct(changePct)}</span>
+            </div>
+            {session && <span className="hidden shrink-0 rounded-full border border-signal/25 bg-signal/10 px-2 py-0.5 font-mono text-[0.54rem] uppercase tracking-widest text-signal xl:inline">{session}</span>}
+            <div className="ml-auto flex shrink-0 items-center gap-1.5">
+              <div className="flex items-center rounded-md border border-border p-0.5">
+                {RANGES.map((r) => <button key={r} onClick={() => setRange(r)} className={`rounded px-2 py-0.5 font-mono text-[0.6rem] uppercase transition-colors ${range === r ? "bg-signal/15 text-signal" : "text-muted-foreground hover:text-foreground"}`}>{r}</button>)}
               </div>
-              {session && <span className="ml-auto rounded-full border border-signal/30 bg-signal/10 px-2.5 py-1 font-mono text-[0.6rem] uppercase tracking-widest text-signal">{session}</span>}
+              <button onClick={addNextChart} disabled={charts.length >= 4} title="add a chart" className="grid h-6 w-6 place-items-center rounded-md border border-border font-mono text-[0.8rem] leading-none text-muted-foreground transition-colors hover:border-signal/40 hover:text-signal disabled:opacity-30">＋</button>
+              <PanelMenu open={panels} onToggle={(id) => (panels.includes(id) ? closePanel(id) : openPanel(id))} />
             </div>
-          </Pane>
-
-          {/* add-panel toolbar — pinned at the TOP, always visible (no scrolling to add) */}
-          <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-border bg-[#0b0b0d]/62 px-2.5 py-1.5 backdrop-blur-md">
-            <span className="font-mono text-[0.56rem] uppercase tracking-widest text-signal">＋ panel</span>
-            {ALL_PANELS.filter((p) => !panels.includes(p.id)).map((p) => (
-              <button key={p.id} onClick={() => openPanel(p.id)} className="rounded border border-border px-2 py-0.5 font-mono text-[0.6rem] uppercase tracking-wide text-muted-foreground transition-colors hover:border-signal/40 hover:text-signal">{p.title}</button>
-            ))}
-            {ALL_PANELS.every((p) => panels.includes(p.id)) && <span className="font-mono text-[0.6rem] text-muted-foreground/40">all open</span>}
-          </div>
-
-          {/* the chart — fills the remaining height (big) */}
-          <Pane n={4} title={charts.length > 1 ? `Charts · ${charts.length}` : `Chart · ${selected}`} right={
-            <div className="flex items-center gap-1">
-              {RANGES.map((r) => <button key={r} onClick={() => setRange(r)} className={`rounded px-1.5 py-0.5 font-mono text-[0.6rem] uppercase transition-colors ${range === r ? "bg-signal/15 text-signal" : "text-muted-foreground hover:text-foreground"}`}>{r}</button>)}
-              <button onClick={addNextChart} disabled={charts.length >= 4} title="add a chart" className="ml-1 grid h-4 w-4 place-items-center rounded bg-signal/15 font-mono text-[0.7rem] text-signal transition-colors hover:bg-signal/25 disabled:opacity-30">＋</button>
-            </div>
-          } bodyClass="p-0">
+          </header>
+          <div className="min-h-0 flex-1">
             <ChartWorkspace charts={charts} activeId={activeId} range={range} onFocus={setActiveId} onClose={closeChart} onHandle={(id, h) => { handlesRef.current[id] = h; }} />
-          </Pane>
-        </div>
+          </div>
+        </section>
 
         {/* RIGHT: the terminal agent */}
         <HorizonRail selected={selected} messages={messages} busy={busy} status={status} onAsk={ask}
-          pendingTrade={pendingTrade} taker={address ?? null} onClearTrade={() => setPendingTrade(null)} onSettings={() => setKeyOpen(true)} />
+          pendingTrade={pendingTrade} taker={address ?? null} onClearTrade={() => setPendingTrade(null)} onSettings={() => setKeyOpen(true)} connected={isConnected} />
       </div>
 
-      {/* floating panels — draggable/resizable pop-ups over the chart (user + agent open these) */}
-      {panels.map((id, i) => { const p = ALL_PANELS.find((x) => x.id === id); if (!p) return null;
-        return <FloatingPanel key={id} title={p.title} index={i} onClose={() => closePanel(id)} onExpand={() => setExpanded(id)}>{renderPanelBody(id)}</FloatingPanel>; })}
+      {/* one unified, tabbed pop-up dock — every summoned panel is a tab here, never a scattered
+          window. Draggable, resizable, maximizable. Empty → nothing renders (chart stays vanilla). */}
+      <PanelDock panels={panels} titleOf={(id) => ALL_PANELS.find((x) => x.id === id)?.title ?? id}
+        render={renderPanelBody} onCloseTab={closePanel} onCloseAll={() => persistPanels([])} />
 
       {/* ── bottom status bar ── */}
       <footer className="relative z-10 flex h-7 shrink-0 items-center gap-4 border-t border-border bg-[#0a0a0b]/90 px-4 font-mono text-[0.62rem] text-muted-foreground">
-        <span className="text-signal">● terminal</span>
-        {indices.map((m) => <span key={m.label} className="hidden items-center gap-1.5 sm:inline-flex">{m.label} <span className={m.changePct >= 0 ? "text-signal" : "text-[#ff5a5a]"}>{pct(m.changePct)}</span></span>)}
+        <span className="flex items-center gap-1.5 text-signal"><span className="h-1.5 w-1.5 rounded-full bg-signal" />terminal · live</span>
+        <span className="hidden text-muted-foreground/50 sm:inline">{selected} · {range} · {charts.length} chart{charts.length === 1 ? "" : "s"} · {panels.length} panel{panels.length === 1 ? "" : "s"}</span>
         <span className="ml-auto hidden gap-4 md:flex">
           <span><kbd className="text-foreground">/</kbd> search</span>
           <span><kbd className="text-foreground">+</kbd> add panel</span>
@@ -426,29 +409,92 @@ function Empty({ children }: { children: React.ReactNode }) {
   return <div className="grid h-full place-items-center font-mono text-[0.7rem] uppercase tracking-widest text-muted-foreground/50">{children}</div>;
 }
 
-// A draggable, resizable floating pop-up panel — clicked/added panels open as these over the chart.
-let FLOAT_Z = 60;
-function FloatingPanel({ title, index, onClose, onExpand, children }: { title: string; index: number; onClose: () => void; onExpand?: () => void; children: React.ReactNode }) {
-  const [pos, setPos] = useState(() => ({ x: 320 + (index % 3) * 40 + index * 8, y: 140 + (index % 4) * 34 + index * 4 }));
-  const [z, setZ] = useState(() => ++FLOAT_Z);
-  const drag = useRef<{ dx: number; dy: number } | null>(null);
-  const focus = () => setZ(++FLOAT_Z);
-  const onDown = (e: React.PointerEvent) => { focus(); drag.current = { dx: e.clientX - pos.x, dy: e.clientY - pos.y }; (e.currentTarget as Element).setPointerCapture(e.pointerId); };
-  const onMove = (e: React.PointerEvent) => { if (!drag.current) return; setPos({ x: Math.max(4, e.clientX - drag.current.dx), y: Math.max(56, e.clientY - drag.current.dy) }); };
-  const onUp = (e: React.PointerEvent) => { drag.current = null; try { (e.currentTarget as Element).releasePointerCapture(e.pointerId); } catch { /* */ } };
+// A compact dropdown in the chart header to summon/dismiss panels (they open in the dock below).
+function PanelMenu({ open, onToggle }: { open: string[]; onToggle: (id: string) => void }) {
+  const [show, setShow] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => { const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setShow(false); }; document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h); }, []);
   return (
-    <div onPointerDown={focus}
-      style={{ left: pos.x, top: pos.y, width: 400, height: 340, minWidth: 260, minHeight: 190, maxWidth: "92vw", zIndex: z, resize: "both" }}
-      className="fixed z-30 flex flex-col overflow-hidden rounded-lg border border-signal/25 bg-[#0b0b0d]/95 shadow-2xl backdrop-blur-md">
+    <div ref={ref} className="relative">
+      <button onClick={() => setShow((s) => !s)} className={`flex items-center gap-1 rounded-md border px-2 py-1 font-mono text-[0.6rem] uppercase tracking-wide transition-colors ${show || open.length ? "border-signal/40 text-signal" : "border-border text-muted-foreground hover:text-foreground"}`}>
+        ＋ panels{open.length ? <span className="text-signal">· {open.length}</span> : null}
+      </button>
+      {show && (
+        <div className="absolute right-0 top-full z-[60] mt-1.5 w-52 overflow-hidden rounded-xl border border-border bg-[#0d0d10] p-1 shadow-2xl">
+          <div className="px-2.5 py-1 font-mono text-[0.54rem] uppercase tracking-widest text-muted-foreground/50">open a panel</div>
+          {ALL_PANELS.map((p) => { const on = open.includes(p.id); return (
+            <button key={p.id} onClick={() => onToggle(p.id)} className={`flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-[0.76rem] transition-colors ${on ? "text-signal" : "text-muted-foreground hover:bg-white/[0.04] hover:text-foreground"}`}>
+              {p.title}
+              <span className={`grid h-4 w-4 place-items-center rounded border text-[0.6rem] ${on ? "border-signal/50 bg-signal/15 text-signal" : "border-border text-transparent"}`}>✓</span>
+            </button>
+          ); })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── the unified panel dock — ONE draggable/resizable/maximizable pop-up. Every summoned panel is a
+// tab here (order book, news, ratings…), so panels never scatter into overlapping windows. ──
+function PanelDock({ panels, titleOf, render, onCloseTab, onCloseAll }: { panels: string[]; titleOf: (id: string) => string; render: (id: string) => React.ReactNode; onCloseTab: (id: string) => void; onCloseAll: () => void }) {
+  const [active, setActive] = useState(panels[panels.length - 1] ?? "");
+  const [pos, setPos] = useState({ x: 360, y: 150 });
+  const [max, setMax] = useState(false);
+  const drag = useRef<{ sx: number; sy: number; px: number; py: number } | null>(null);
+  useEffect(() => { if (panels.length && !panels.includes(active)) setActive(panels[panels.length - 1]); }, [panels, active]);
+  if (!panels.length) return null;
+  const onDown = (e: React.PointerEvent) => { if (max) return; drag.current = { sx: e.clientX, sy: e.clientY, px: pos.x, py: pos.y }; (e.currentTarget as Element).setPointerCapture(e.pointerId); };
+  const onMove = (e: React.PointerEvent) => { if (!drag.current) return; setPos({ x: Math.max(8, drag.current.px + (e.clientX - drag.current.sx)), y: Math.max(64, drag.current.py + (e.clientY - drag.current.sy)) }); };
+  const onUp = (e: React.PointerEvent) => { drag.current = null; try { (e.currentTarget as Element).releasePointerCapture(e.pointerId); } catch { /* */ } };
+  const activeId = panels.includes(active) ? active : panels[panels.length - 1];
+  return (
+    <div
+      style={max
+        ? { left: "3vw", top: 82, width: "94vw", height: "78vh", zIndex: 70 }
+        : { left: pos.x, top: pos.y, width: 480, height: 420, minWidth: 340, minHeight: 260, maxWidth: "92vw", zIndex: 70, resize: "both" }}
+      className="fixed flex flex-col overflow-hidden rounded-xl border border-signal/25 bg-[#0b0b0d]/95 shadow-2xl backdrop-blur-md">
+      {/* tab strip doubles as the drag handle */}
       <header onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp}
-        className="flex h-8 shrink-0 cursor-grab items-center justify-between border-b border-border px-3 active:cursor-grabbing">
-        <span className="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-muted-foreground">⠿ {title}</span>
-        <div className="flex items-center gap-2">
-          {onExpand && <button onClick={onExpand} title="expand" className="font-mono text-[0.8rem] leading-none text-muted-foreground/50 transition-colors hover:text-signal">⤢</button>}
-          <button onClick={onClose} title="close" className="font-mono text-[0.85rem] leading-none text-muted-foreground/50 transition-colors hover:text-[#ff5a5a]">×</button>
+        className={`flex h-9 shrink-0 items-stretch gap-1 border-b border-border pl-2 pr-1.5 ${max ? "" : "cursor-grab active:cursor-grabbing"}`}>
+        <span className="grid select-none place-items-center pr-1 text-[0.7rem] text-muted-foreground/40">⠿</span>
+        <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none]" onPointerDown={(e) => e.stopPropagation()}>
+          {panels.map((id) => { const on = id === activeId; return (
+            <div key={id} className={`group flex h-7 shrink-0 items-center gap-1.5 self-center rounded-md pl-2.5 pr-1.5 font-mono text-[0.62rem] uppercase tracking-wide transition-colors ${on ? "bg-signal/12 text-signal" : "text-muted-foreground hover:bg-white/[0.04] hover:text-foreground"}`}>
+              <button onClick={() => setActive(id)}>{titleOf(id)}</button>
+              <button onClick={() => onCloseTab(id)} title="close tab" className={`grid h-4 w-4 place-items-center rounded text-[0.8rem] leading-none transition-all hover:bg-[#ff5a5a]/15 hover:text-[#ff5a5a] ${on ? "text-signal/60" : "text-muted-foreground/40 opacity-0 group-hover:opacity-100"}`}>×</button>
+            </div>
+          ); })}
+        </div>
+        <div className="flex shrink-0 items-center gap-1 self-center" onPointerDown={(e) => e.stopPropagation()}>
+          <button onClick={() => setMax((m) => !m)} title={max ? "restore" : "maximize"} className="grid h-6 w-6 place-items-center rounded-md text-[0.8rem] text-muted-foreground/60 transition-colors hover:bg-white/5 hover:text-signal">{max ? "❐" : "⤢"}</button>
+          <button onClick={onCloseAll} title="close dock" className="grid h-6 w-6 place-items-center rounded-md text-[0.95rem] leading-none text-muted-foreground/60 transition-colors hover:bg-[#ff5a5a]/15 hover:text-[#ff5a5a]">×</button>
         </div>
       </header>
-      <div className="min-h-0 flex-1 overflow-auto">{children}</div>
+      <div className="min-h-0 flex-1 overflow-auto">{render(activeId)}</div>
+    </div>
+  );
+}
+
+// ── wallet gate — the agent is gated to your wallet; connect first, then add a key ──
+function WalletGate() {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-5 px-6 text-center">
+      <span className="grid h-14 w-14 place-items-center rounded-2xl border border-signal/30 bg-signal/10">
+        <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="text-signal"><path d="M3 7a2 2 0 0 1 2-2h13a1 1 0 0 1 1 1v2" /><path d="M3 7v10a2 2 0 0 0 2 2h14a1 1 0 0 0 1-1v-3" /><path d="M20 11v4h-4a2 2 0 0 1 0-4z" /></svg>
+      </span>
+      <div className="space-y-1.5">
+        <h3 className="font-display text-lg tracking-tight text-foreground">Connect your wallet</h3>
+        <p className="mx-auto max-w-[15rem] text-[0.82rem] leading-relaxed text-muted-foreground">The agent runs against your wallet — connect to unlock the chat. You&apos;ll sign every trade yourself.</p>
+      </div>
+      <ConnectButton.Custom>
+        {({ openConnectModal, mounted }) => (
+          <button onClick={openConnectModal} disabled={!mounted}
+            className="rounded-lg border border-signal/50 bg-signal/15 px-6 py-2.5 font-mono text-[0.74rem] font-medium uppercase tracking-[0.14em] text-signal transition-colors hover:bg-signal/25">
+            Connect wallet
+          </button>
+        )}
+      </ConnectButton.Custom>
+      <p className="font-mono text-[0.58rem] uppercase tracking-widest text-muted-foreground/40">then add a model key · or use free mode</p>
     </div>
   );
 }
@@ -506,7 +552,7 @@ function renderMd(text: string): React.ReactNode {
 }
 
 // ── Horizon agent rail — a real chat that operates the terminal ──
-function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrade, taker, onClearTrade, onSettings }: { selected: string; messages: HMsg[]; busy: boolean; status: string; onAsk: (t: string) => void; pendingTrade: ProposedTrade | null; taker: string | null; onClearTrade: () => void; onSettings: () => void }) {
+function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrade, taker, onClearTrade, onSettings, connected }: { selected: string; messages: HMsg[]; busy: boolean; status: string; onAsk: (t: string) => void; pendingTrade: ProposedTrade | null; taker: string | null; onClearTrade: () => void; onSettings: () => void; connected: boolean }) {
   const [input, setInput] = useState("");
   const [enabled, setEnabled] = useState<string[]>(ALL_SKILL_IDS);
   const [showSkills, setShowSkills] = useState(false);
@@ -530,13 +576,14 @@ function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrade, ta
   const send = () => { const raw = input; setInput(""); setSlashIdx(0); setAtIdx(0); const r = resolveSlashCommand(raw); onAsk(r ? r.skill.prompt(r.arg) : raw); };
 
   return (
-    <Pane n={7} title="Agent" right={
+    <Pane n={3} title="Agent" right={
       <div className="flex items-center gap-2">
         <button onClick={onSettings} title="Connect intelligence / API key" className="grid h-6 w-6 place-items-center rounded-md border border-border text-muted-foreground transition-colors hover:border-signal/50 hover:bg-signal/10 hover:text-signal">
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
         </button>
       </div>
     } bodyClass="flex flex-col">
+      {!connected ? <WalletGate /> : <>
       <div ref={scrollRef} className="flex-1 space-y-3 overflow-auto p-4">
         {messages.length === 0 && (
           <div className="space-y-4">
@@ -616,6 +663,7 @@ function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrade, ta
         </div>
       </div>
       {showSkills && <SkillsModal enabled={enabled} onToggle={toggleSkill} onSet={persistSkills} onClose={() => setShowSkills(false)} />}
+      </>}
     </Pane>
   );
 }

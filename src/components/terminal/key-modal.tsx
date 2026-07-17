@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { motion } from "motion/react";
 // import the Mono glyph variant directly — the icon barrels + Avatar/Combine variants pull a heavy
 // @lobehub/ui dep we don't want; Mono is a clean react-only SVG (inherits currentColor).
 import OpenRouter from "@lobehub/icons/es/OpenRouter/components/Mono";
@@ -135,9 +136,11 @@ export function InlineKeySetup({ onChanged, onMore }: { onChanged?: () => void; 
     const k = keys[0];
     const label = MODELS[k.provider].find((mi) => mi.id === model)?.label;
     return (
-      <div className="rounded-xl border border-signal/40 bg-signal/[0.06] p-3">
+      <motion.div initial={{ opacity: 0, y: 6, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ type: "spring", stiffness: 420, damping: 26 }}
+        className="rounded-xl border border-signal/40 bg-signal/[0.06] p-3">
         <div className="flex items-center gap-2">
-          <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-signal/20 text-[0.7rem] text-signal">✓</span>
+          <motion.span initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: "spring", stiffness: 600, damping: 18, delay: 0.08 }}
+            className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-signal/20 text-[0.7rem] text-signal">✓</motion.span>
           <Brand brand={PROVIDER_BRAND[k.provider]} size={16} />
           <span className="font-mono text-[0.76rem] text-foreground">{k.provider} connected</span>
           <span className="ml-auto font-mono text-[0.6rem] uppercase tracking-widest text-muted-foreground">····{k.last4}</span>
@@ -147,7 +150,7 @@ export function InlineKeySetup({ onChanged, onMore }: { onChanged?: () => void; 
           {onMore && <button onClick={onMore} className="font-mono text-[0.6rem] uppercase tracking-widest text-muted-foreground transition-colors hover:text-signal">change · model</button>}
           <button onClick={() => { removeProviderKey(k.provider); refresh(); onChanged?.(); }} className="font-mono text-[0.6rem] uppercase tracking-widest text-muted-foreground transition-colors hover:text-[#ff5a5a]">disconnect · use free</button>
         </div>
-      </div>
+      </motion.div>
     );
   }
 
