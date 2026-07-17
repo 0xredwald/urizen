@@ -9,11 +9,14 @@ import { TradeTicket, type ProposedTrade } from "@/components/terminal/trade-tic
 import { ChartWorkspace } from "@/components/terminal/chart-workspace";
 import { KeyModal } from "@/components/terminal/key-modal";
 import { NewsPanel, RatingsPanel, FundamentalsPanel, MacroPanel, PredictionsPanel, OnchainPanel } from "@/components/terminal/data-panels";
+import { TVNews, TVEconCalendar, TVTickerTape, TVHotlists, TVHeatmap } from "@/components/terminal/tv-widgets";
 import { AncientOfDays } from "@/components/quant/ancient-of-days";
 import { UrizenMark } from "@/components/brand/marks";
 import { STOCKS } from "@/lib/stocks";
 import { runHorizon, type HAction, type HMsg } from "@/lib/horizon";
 import { unlockVault } from "@/lib/agents";
+import { matchSlash, resolveSlashCommand, SlashMenu, SkillsModal } from "@/components/alpha/skills-panel";
+import { ALL_SKILL_IDS } from "@/components/alpha/skills";
 import type { Candle } from "@/lib/quant";
 
 // ── Horizon Terminal — P1 shell ──────────────────────────────────────────────
@@ -31,8 +34,10 @@ const pct = (n: number) => `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
 
 // the panels the user (and the agent) can add/close in the centre workspace
 const ALL_PANELS: { id: string; title: string }[] = [
+  { id: "news", title: "News" }, { id: "calendar", title: "Economic calendar" },
+  { id: "hotlists", title: "Hotlists" }, { id: "heatmap", title: "Heatmap" },
   { id: "gainers", title: "Top gainers" }, { id: "losers", title: "Top losers" },
-  { id: "news", title: "News" }, { id: "ratings", title: "Analyst ratings" },
+  { id: "headlines", title: "Headlines" }, { id: "ratings", title: "Analyst ratings" },
   { id: "fundamentals", title: "Fundamentals" }, { id: "macro", title: "Macro" },
   { id: "predictions", title: "Prediction markets" }, { id: "onchain", title: "On-chain" },
 ];
@@ -47,7 +52,7 @@ function Logo({ s, size = 18 }: { s: string; size?: number }) {
 // A titled, numbered pane — the Bloomberg tell.
 function Pane({ n, title, right, children, className = "", bodyClass = "", onClose }: { n?: number; title: string; right?: React.ReactNode; children: React.ReactNode; className?: string; bodyClass?: string; onClose?: () => void }) {
   return (
-    <section className={`flex min-h-0 flex-col overflow-hidden border border-border bg-[#0b0b0d]/70 backdrop-blur-sm ${className}`}>
+    <section className={`flex min-h-0 flex-col overflow-hidden border border-border bg-[#0b0b0d]/62 backdrop-blur-md ${className}`}>
       <header className="flex h-8 shrink-0 items-center justify-between border-b border-border px-3">
         <div className="flex items-center gap-2">
           {n != null && <span className="grid h-4 w-4 place-items-center rounded-[3px] bg-signal/15 font-mono text-[9px] text-signal">{n}</span>}
@@ -88,13 +93,17 @@ export function TerminalShell() {
 
   useEffect(() => { try { const s = localStorage.getItem("urizen.terminal.panels"); if (s) setPanels(JSON.parse(s)); } catch { /* noop */ } }, []);
   const persistPanels = (p: string[]) => { setPanels(p); try { localStorage.setItem("urizen.terminal.panels", JSON.stringify(p)); } catch { /* noop */ } };
-  const openPanel = (id: string) => { if (ALL_PANELS.some((p) => p.id === id)) persistPanels(panels.includes(id) ? panels : [...panels, id]); };
+  const openPanel = (id: string) => { if (ALL_PANELS.some((p) => p.id === id)) persistPanels(panels.includes(id) ? panels : [id, ...panels]); };
   const closePanel = (id: string) => persistPanels(panels.filter((p) => p !== id));
   const renderPanelBody = (id: string) => {
     switch (id) {
       case "gainers": return <MoversBody rows={gainers} onPick={setSelected} up />;
       case "losers": return <MoversBody rows={losers} onPick={setSelected} />;
-      case "news": return <NewsPanel symbol={selected} />;
+      case "news": return <TVNews symbol={selected} />;
+      case "calendar": return <TVEconCalendar />;
+      case "hotlists": return <TVHotlists />;
+      case "heatmap": return <TVHeatmap />;
+      case "headlines": return <NewsPanel symbol={selected} />;
       case "ratings": return <RatingsPanel symbol={selected} />;
       case "fundamentals": return <FundamentalsPanel symbol={selected} />;
       case "macro": return <MacroPanel />;
@@ -266,10 +275,17 @@ export function TerminalShell() {
 
   return (
     <main className="relative flex h-screen flex-col overflow-hidden bg-[#0a0a0b] text-foreground">
-      {/* Blake compass behind everything — visible, with a soft green wash */}
-      <div aria-hidden className="pointer-events-none fixed inset-0 z-0">
-        <div className="absolute inset-0" style={{ background: "radial-gradient(65% 60% at 50% 32%, rgba(52,240,3,0.08), transparent 72%)" }} />
-        <div className="absolute inset-0 opacity-[0.42]"><AncientOfDays className="h-full w-full" /></div>
+      {/* William Blake — the "Ancient of Days" painting on the right (measuring the deep with a
+          compass), desaturated and masked into the dark, over faint engraved outlines + a green wash.
+          Sophisticated, present, never loud — the terminal's signature. */}
+      <div aria-hidden className="pointer-events-none fixed inset-0 z-0 bg-[#08080a]">
+        {/* full-bleed Blake painting watermark — shows through the translucent panes + gaps */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/img/blake-ancient.jpg" alt="" className="absolute inset-0 h-full w-full object-cover object-[center_16%] opacity-[0.26] grayscale contrast-[1.2]" />
+        {/* engraved compass outlines over it */}
+        <div className="absolute inset-0 opacity-[0.13]"><AncientOfDays className="h-full w-full" /></div>
+        {/* green wash + a soft dark veil so dense data stays readable */}
+        <div className="absolute inset-0" style={{ background: "radial-gradient(55% 50% at 40% 22%, rgba(52,240,3,0.06), transparent 68%), linear-gradient(180deg, rgba(8,8,10,0.4) 0%, rgba(8,8,10,0.6) 100%)" }} />
       </div>
       {/* the visible agent cursor (fixed overlay) */}
       <HorizonCursor ref={cursorRef} />
@@ -290,6 +306,9 @@ export function TerminalShell() {
           <ConnectWalletButton />
         </div>
       </header>
+
+      {/* ── ticker tape ribbon (TradingView) ── */}
+      <div className="relative z-10 h-9 shrink-0 overflow-hidden border-b border-border bg-[#0a0a0b]/50"><TVTickerTape /></div>
 
       {/* ── body: three rails ── */}
       <div className="relative z-10 grid min-h-0 flex-1 gap-2 p-2" style={{ gridTemplateColumns: "minmax(215px,245px) minmax(0,1fr) minmax(400px,460px)" }}>
@@ -418,6 +437,9 @@ function MoversBody({ rows, onPick, up }: { rows: Mover[]; onPick: (s: string) =
 // ── Horizon agent rail — a real chat that operates the terminal ──
 function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrade, taker, onClearTrade, onSettings }: { selected: string; messages: HMsg[]; busy: boolean; status: string; onAsk: (t: string) => void; pendingTrade: ProposedTrade | null; taker: string | null; onClearTrade: () => void; onSettings: () => void }) {
   const [input, setInput] = useState("");
+  const [enabled, setEnabled] = useState<string[]>(ALL_SKILL_IDS);
+  const [showSkills, setShowSkills] = useState(false);
+  const [slashIdx, setSlashIdx] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const examples = [
     `analyse ${selected} and draw the trend`,
@@ -425,14 +447,21 @@ function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrade, ta
     "add a 50-day MA and RSI",
     `any news moving ${selected}?`,
   ];
+  useEffect(() => { try { const raw = localStorage.getItem("urizen.skills.v1"); if (raw) { const ids = JSON.parse(raw); if (Array.isArray(ids)) setEnabled(ids.filter((id: string) => ALL_SKILL_IDS.includes(id))); } } catch { /* noop */ } }, []);
+  const persistSkills = (ids: string[]) => { setEnabled(ids); try { localStorage.setItem("urizen.skills.v1", JSON.stringify(ids)); } catch { /* noop */ } };
+  const toggleSkill = (id: string) => persistSkills(enabled.includes(id) ? enabled.filter((x) => x !== id) : [...enabled, id]);
+  const slashItems = matchSlash(input);
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }); }, [messages, status]);
-  const send = () => { const t = input; setInput(""); onAsk(t); };
+  const pickSkill = (s: { command: string }) => { setInput(s.command + " "); setSlashIdx(0); };
+  const send = () => { const raw = input; setInput(""); setSlashIdx(0); const r = resolveSlashCommand(raw); onAsk(r ? r.skill.prompt(r.arg) : raw); };
 
   return (
     <Pane n={7} title="Agent" right={
       <div className="flex items-center gap-2">
         {busy && <span className="font-mono text-[0.58rem] uppercase tracking-widest text-signal">working…</span>}
-        <button onClick={onSettings} title="Connect intelligence / API key" className="font-mono text-[0.72rem] text-muted-foreground transition-colors hover:text-signal">⚙</button>
+        <button onClick={onSettings} title="Connect intelligence / API key" className="grid h-6 w-6 place-items-center rounded-md border border-border text-muted-foreground transition-colors hover:border-signal/50 hover:bg-signal/10 hover:text-signal">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
+        </button>
       </div>
     } bodyClass="flex flex-col">
       <div ref={scrollRef} className="flex-1 space-y-3 overflow-auto p-4">
@@ -474,18 +503,33 @@ function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrade, ta
           <TradeTicket trade={pendingTrade} taker={taker} onClose={onClearTrade} />
         </div>
       )}
-      <div className="shrink-0 border-t border-border p-3">
+      <div className="relative shrink-0 border-t border-border p-3">
+        {slashItems.length > 0 && <SlashMenu items={slashItems} active={slashIdx} onPick={pickSkill} title="Skills" />}
         <div className="flex items-end gap-2 rounded-xl border border-border bg-[#0d0d10] p-1.5 focus-within:border-signal/40">
           <textarea value={input} onChange={(e) => setInput(e.target.value)} rows={1} disabled={busy}
-            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-            placeholder={busy ? "working…" : `ask the agent about ${selected}…`}
+            onKeyDown={(e) => {
+              if (slashItems.length > 0) {
+                if (e.key === "ArrowDown") { e.preventDefault(); setSlashIdx((i) => Math.min(i + 1, slashItems.length - 1)); return; }
+                if (e.key === "ArrowUp") { e.preventDefault(); setSlashIdx((i) => Math.max(i - 1, 0)); return; }
+                if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) { e.preventDefault(); pickSkill(slashItems[slashIdx]); return; }
+                if (e.key === "Escape") { setInput(""); return; }
+              }
+              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+            }}
+            placeholder={busy ? "working…" : `ask the agent, or type / for skills…`}
             className="max-h-24 min-h-[2rem] flex-1 resize-none bg-transparent px-2 py-1.5 text-[0.82rem] outline-none placeholder:text-muted-foreground/50 disabled:opacity-50" />
           <button onClick={send} disabled={busy || !input.trim()} className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-signal/15 text-signal transition-colors hover:bg-signal/25 disabled:opacity-40">
             <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor"><path d="M3 11l18-8-8 18-2-7-8-3z" /></svg>
           </button>
         </div>
-        <div className="mt-1.5 text-center font-mono text-[0.55rem] uppercase tracking-widest text-muted-foreground/40">the agent operates the terminal · you sign every trade</div>
+        <div className="mt-1.5 flex items-center justify-between">
+          <button onClick={() => setShowSkills(true)} className="flex items-center gap-1.5 font-mono text-[0.58rem] uppercase tracking-widest text-muted-foreground transition-colors hover:text-signal">
+            ✦ Skills · {enabled.length}/{ALL_SKILL_IDS.length}
+          </button>
+          <span className="font-mono text-[0.55rem] uppercase tracking-widest text-muted-foreground/40">you sign every trade</span>
+        </div>
       </div>
+      {showSkills && <SkillsModal enabled={enabled} onToggle={toggleSkill} onSet={persistSkills} onClose={() => setShowSkills(false)} />}
     </Pane>
   );
 }

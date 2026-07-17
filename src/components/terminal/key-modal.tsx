@@ -1,7 +1,30 @@
 "use client";
 
 import { useEffect, useState } from "react";
+// import the Mono glyph variant directly — the icon barrels + Avatar/Combine variants pull a heavy
+// @lobehub/ui dep we don't want; Mono is a clean react-only SVG (inherits currentColor).
+import OpenRouter from "@lobehub/icons/es/OpenRouter/components/Mono";
+import Claude from "@lobehub/icons/es/Claude/components/Mono";
+import OpenAI from "@lobehub/icons/es/OpenAI/components/Mono";
+import Grok from "@lobehub/icons/es/Grok/components/Mono";
+import Gemini from "@lobehub/icons/es/Gemini/components/Mono";
+import DeepSeek from "@lobehub/icons/es/DeepSeek/components/Mono";
+import Meta from "@lobehub/icons/es/Meta/components/Mono";
+import Mistral from "@lobehub/icons/es/Mistral/components/Mono";
+import Qwen from "@lobehub/icons/es/Qwen/components/Mono";
+import Groq from "@lobehub/icons/es/Groq/components/Mono";
 import { addProviderKey, listProviderKeys, removeProviderKey, setModel, getActiveModel, isFreeMode, MODELS, getActiveProvider, type Provider } from "@/lib/agents";
+
+// brand string (from agents.ts MODELS) → the official provider logo
+const BRAND_ICON: Record<string, React.ComponentType<{ size?: number }>> = {
+  openrouter: OpenRouter, anthropic: Claude, openai: OpenAI, xai: Grok, google: Gemini,
+  deepseek: DeepSeek, meta: Meta, mistral: Mistral, qwen: Qwen, groq: Groq,
+};
+function Brand({ brand, size = 15 }: { brand: string; size?: number }) {
+  const I = BRAND_ICON[brand];
+  return I ? <I size={size} /> : <span className="font-mono text-[0.7rem] text-muted-foreground">{brand.slice(0, 2)}</span>;
+}
+const PROVIDER_BRAND: Record<Provider, string> = { anthropic: "anthropic", openai: "openai", openrouter: "openrouter" };
 
 // Connect intelligence — the terminal's agent runs on Free Mode by default (our server key + a free
 // model) or your own key (Anthropic / OpenAI / OpenRouter), held encrypted in your browser and sent
@@ -42,11 +65,16 @@ export function KeyModal({ open, onClose, onChanged }: { open: boolean; onClose:
         <p className="mt-1 text-[0.8rem] leading-relaxed text-muted-foreground">
           The agent runs on <span className="text-signal">Free Mode</span> by default. Add your own key for the top models — it&apos;s encrypted in your browser and sent only to the provider, never to us.
         </p>
+        <div className="mt-3 flex flex-wrap items-center gap-3 text-foreground/85">
+          {["openrouter", "anthropic", "openai", "xai", "google", "deepseek", "meta", "mistral", "qwen", "groq"].map((b) => (
+            <span key={b} title={b} className="opacity-60 transition-opacity hover:opacity-100"><Brand brand={b} size={19} /></span>
+          ))}
+        </div>
 
         {/* current mode */}
         <div className="mt-4 rounded-xl border border-border bg-white/[0.02] p-3">
           <div className="flex items-center gap-2">
-            <span className="h-1.5 w-1.5 rounded-full bg-signal" />
+            {!free && provider ? <Brand brand={PROVIDER_BRAND[provider]} size={15} /> : <span className="h-1.5 w-1.5 rounded-full bg-signal" />}
             <span className="font-mono text-[0.72rem] uppercase tracking-widest text-foreground">{free ? "Free Mode" : `${provider} · connected`}</span>
           </div>
           {keys.length > 0 && (
@@ -76,8 +104,8 @@ export function KeyModal({ open, onClose, onChanged }: { open: boolean; onClose:
             <div className="flex flex-wrap gap-1.5">
               {MODELS[provider].map((mi) => (
                 <button key={mi.id} onClick={() => pickModel(mi.id)}
-                  className={`rounded-lg border px-2.5 py-1 font-mono text-[0.7rem] transition-colors ${model === mi.id ? "border-signal/50 bg-signal/10 text-signal" : "border-border text-muted-foreground hover:text-foreground"}`}>
-                  {mi.label}{mi.free ? " · free" : ""}
+                  className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1 font-mono text-[0.7rem] transition-colors ${model === mi.id ? "border-signal/50 bg-signal/10 text-signal" : "border-border text-muted-foreground hover:text-foreground"}`}>
+                  <Brand brand={mi.brand} size={13} />{mi.label}{mi.free ? " · free" : ""}
                 </button>
               ))}
             </div>
