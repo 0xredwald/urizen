@@ -50,7 +50,7 @@ function TokenPicker({ exclude, onPick, onClose }: { exclude?: string; onPick: (
   );
 }
 
-export function PhantomSwap({ defaultSell = "USDG", defaultBuy = "NVDA", defaultAmount = "100", className = "" }: { defaultSell?: string; defaultBuy?: string; defaultAmount?: string; className?: string }) {
+export function PhantomSwap({ defaultSell = "USDG", defaultBuy = "NVDA", defaultAmount = "100", autoSign = false, className = "" }: { defaultSell?: string; defaultBuy?: string; defaultAmount?: string; autoSign?: boolean; className?: string }) {
   const { address, isConnected } = useAccount();
   const chainId = useChainId();
   const { openConnectModal } = useConnectModal();
@@ -117,6 +117,17 @@ export function PhantomSwap({ defaultSell = "USDG", defaultBuy = "NVDA", default
       setTxHash(hash);
     } catch (e) { setErr((e as Error).message.split("\n")[0]); } finally { setExecuting(false); setExecStatus(null); }
   };
+
+  // auto-sign: opened from the bot with the wallet already connected → fire the swap the moment the
+  // quote is ready, so the user's wallet pops the signature and all they do is Approve. Fires once.
+  const autoFired = useRef(false);
+  useEffect(() => {
+    if (autoSign && isConnected && quote && !executing && !txHash && !err && !autoFired.current) {
+      autoFired.current = true;
+      doSwap();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoSign, isConnected, quote, executing, txHash, err]);
 
   const wrongChain = isConnected && chainId !== RH;
   const label = !isConnected ? "Connect wallet" : wrongChain ? "Switch to Robinhood Chain"

@@ -59,7 +59,7 @@ export function AlphaChat() {
   const [streamingId, setStreamingId] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
   const [showSwap, setShowSwap] = useState(true); // swap dock visible by default
-  const [tradeLink, setTradeLink] = useState<{ sell: string; buy: string; amount: string } | null>(null); // a proposed trade from the bot (?sell=…)
+  const [tradeLink, setTradeLink] = useState<{ sell: string; buy: string; amount: string; auto: boolean } | null>(null); // a proposed trade from the bot (?sell=…)
   const [onboarded, setOnboarded] = useState(true); // assume done until we read storage (avoids flash)
   const [hydrated, setHydrated] = useState(false);
   const [enabled, setEnabled] = useState<string[]>(ALL_SKILL_IDS); // which skills the agent may call
@@ -142,8 +142,9 @@ export function AlphaChat() {
     if (typeof window === "undefined") return;
     const q = new URLSearchParams(window.location.search);
     const sell = q.get("sell");
-    if (sell) setTradeLink({ sell, buy: q.get("buy") || "NVDA", amount: q.get("amount") || "100" });
-    else if (q.get("swap") === "1") setTradeLink({ sell: "USDG", buy: "NVDA", amount: "100" }); // configurable swap modal
+    // a specific trade from the bot → auto-sign (your wallet pops, you just approve); ?swap=1 → manual configurator
+    if (sell) setTradeLink({ sell, buy: q.get("buy") || "NVDA", amount: q.get("amount") || "100", auto: true });
+    else if (q.get("swap") === "1") setTradeLink({ sell: "USDG", buy: "NVDA", amount: "100", auto: false });
   }, []);
 
   // pin to bottom only when the user is already near it, and instantly (no smooth animation
@@ -449,7 +450,7 @@ export function AlphaChat() {
               <span className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground"><span className="text-signal">◈</span> Sign your trade</span>
               <button onClick={() => setTradeLink(null)} className="text-sm text-muted-foreground transition-colors hover:text-foreground" aria-label="close">✕</button>
             </div>
-            <PhantomSwap defaultSell={tradeLink.sell} defaultBuy={tradeLink.buy} defaultAmount={tradeLink.amount} />
+            <PhantomSwap defaultSell={tradeLink.sell} defaultBuy={tradeLink.buy} defaultAmount={tradeLink.amount} autoSign={tradeLink.auto} />
           </div>
         </div>
       )}

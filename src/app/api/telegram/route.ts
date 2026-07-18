@@ -81,8 +81,8 @@ async function getCfg(chatId: number): Promise<ChatLLM | null> {
 async function pushOrLinkSwap(chatId: number, sellSym: string, buySym: string, amount: string): Promise<void> {
   const link = `${APP}?sell=${encodeURIComponent(sellSym)}&buy=${encodeURIComponent(buySym)}&amount=${encodeURIComponent(amount)}&tg=${chatId}&sig=${tgLinkSig(chatId)}`;
   await send(chatId,
-    `⚖️ <b>${amount} ${sellSym}</b> → <b>${buySym}</b>\n\nTap to sign in your wallet — it opens pre-filled and connects to your wallet automatically.`,
-    { reply_markup: { inline_keyboard: [[{ text: "↗ Sign in your wallet", url: link }]] } });
+    `⚖️ <b>${amount} ${sellSym}</b> → <b>${buySym}</b>\n\nTap — your wallet pops up to <b>approve</b>. That's it. (Non-custodial, you sign.)`,
+    { reply_markup: { inline_keyboard: [[{ text: "⚡ Approve in your wallet", url: link }]] } });
 }
 
 // The persona the bot speaks in = the user's selected agent, keyed by their linked wallet (shared with
