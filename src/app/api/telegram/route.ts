@@ -4,6 +4,7 @@ import type { Artifact } from "@/lib/alpha-tools";
 import { aiImage, aiImageGemini, aiImageOpenRouter, cardUrl } from "@/lib/image-gen";
 import { configToCode } from "@/lib/agent-graph";
 import { PROVIDERS, providerById, detectBotProvider, looksLikeApiKey, llmFor, type ChatLLM } from "@/lib/bot-providers";
+import { getState, setLlm, setSkills, clearAi, tgLinkSig } from "@/lib/bot-store";
 
 const SITE = "https://urizenfund.com";
 const APP = "https://urizenfund.com/alpha";
@@ -64,11 +65,15 @@ function chartImage(a: Extract<Artifact, { type: "chart" }>): string | null {
   return `${SITE}/api/og/chart?symbol=${encodeURIComponent(a.symbol)}&range=${encodeURIComponent(a.range || "1m")}`;
 }
 
-// ── per-chat state (in-memory, per warm instance) ─────────────────────────────────────────────
-// DM users connect their own AI provider + key + model (BYOK). Onboarding is a small state machine.
-const chatLLM = new Map<number, ChatLLM>();                                    // finished DM connections
-const pending = new Map<number, { step: "key" | "model"; providerId: string; key?: string }>(); // mid-onboarding
-const chatSkills = new Map<number, Set<string>>();                             // per-chat tool toggles
+// ── per-chat state ────────────────────────────────────────────────────────────────────────────
+// The DM connection (provider/key/model), tool toggles and linked wallet are PERSISTED via bot-store
+// (Supabase) so they survive serverless cold starts. Only `pending` — the transient onboarding step —
+// stays in memory (if it's lost, the stateless key handler recovers by detecting the provider).
+const pending = new Map<number, { step: "key" | "model"; providerId: string; key?: string }>();
+async function getCfg(chatId: number): Promise<ChatLLM | null> {
+  const s = await getState(chatId);
+  return s.provider && s.key && s.model ? { providerId: s.provider, key: s.key, model: s.model } : null;
+}
 
 // Skills the user can toggle on/off (the agent's tools).
 const SKILL_TOGGLES: { id: string; label: string }[] = [
@@ -78,9 +83,9 @@ const SKILL_TOGGLES: { id: string; label: string }[] = [
   { id: "generate_image", label: "Images" }, { id: "build_strategy", label: "Strategy" }, { id: "propose_swap", label: "Swap" },
 ];
 const ALL_TOOL_IDS = SKILL_TOGGLES.map((s) => s.id);
-const enabledFor = (chatId: number): string[] => [...(chatSkills.get(chatId) ?? new Set(ALL_TOOL_IDS))];
-function skillsKeyboard(chatId: number) {
-  const en = chatSkills.get(chatId) ?? new Set(ALL_TOOL_IDS);
+const enabledFor = async (chatId: number): Promise<string[]> => (await getState(chatId)).skills ?? ALL_TOOL_IDS;
+function skillsKeyboard(enabled: string[]) {
+  const en = new Set(enabled);
   const rows: { text: string; callback_data: string }[][] = [];
   for (let i = 0; i < SKILL_TOGGLES.length; i += 2) rows.push(SKILL_TOGGLES.slice(i, i + 2).map((s) => ({ text: `${en.has(s.id) ? "✅" : "⬜"} ${s.label}`, callback_data: `sk:${s.id}` })));
   return { inline_keyboard: rows };
@@ -91,19 +96,19 @@ function skillsKeyboard(chatId: number) {
 // WalletConnect deep-links don't return), so a web_app just strands the user on a page they can't
 // connect from. In the external browser the wallet (extension or the wallet's own browser) works.
 // Non-custodial: the user connects + signs in their own wallet on the page.
-function walletKeyboard(_chatType?: string) {
-  void _chatType;
-  const url = `${APP}?connect=1`;
+function walletKeyboard(chatId: number) {
+  // signed tg param so the page can report the connected address back to THIS chat (and only this one)
+  const url = `${APP}?connect=1&tg=${chatId}&sig=${tgLinkSig(chatId)}`;
   return { inline_keyboard: [[{ text: "🔗 Connect wallet in browser", url }]] };
 }
 
 // Resolve the LLM to spend: the house key in a group/channel, the user's own connection in a DM.
-function resolveLlm(chatId: number, chatType?: string): LlmConfig | null {
+async function resolveLlm(chatId: number, chatType?: string): Promise<LlmConfig | null> {
   if (chatType && chatType !== "private") {
     const key = process.env.TELEGRAM_OPENROUTER_KEY || process.env.URIZEN_FREE_OPENROUTER_KEY;
     return key ? { base: "https://openrouter.ai/api/v1", key, models: HOUSE_MODELS } : null;
   }
-  const cfg = chatLLM.get(chatId);
+  const cfg = await getCfg(chatId);
   return cfg ? llmFor(cfg) : null;
 }
 
@@ -151,10 +156,13 @@ const EXAMPLES: { code: string; label: string; q: string }[] = [
 ];
 const starterKeyboard = { inline_keyboard: [[EXAMPLES[0], EXAMPLES[1]], [EXAMPLES[2], EXAMPLES[3]]].map((row) => row.map((e) => ({ text: e.label, callback_data: e.code }))) };
 
-async function sendConnectedHome(chatId: number, cfg: ChatLLM) {
+async function sendConnectedHome(chatId: number, cfg: ChatLLM, wallet?: string) {
   const p = providerById(cfg.providerId)!;
+  const walletLine = wallet
+    ? `\n🔗 Wallet connected · <code>${wallet.slice(0, 6)}…${wallet.slice(-4)}</code> — ready to trade.`
+    : "\n🔗 No wallet yet — <code>/wallet</code> to connect one and trade.";
   await send(chatId,
-    `◈ <b>Urizen Alpha</b> — connected on <b>${p.label}</b> · <code>${cfg.model}</code>.\n\n` +
+    `◈ <b>Urizen Alpha</b> — connected on <b>${p.label}</b> · <code>${cfg.model}</code>.${walletLine}\n\n` +
     "Ask me anything about stocks — I pull real data (charts, SEC fundamentals, ratings, news, macro, Polymarket odds, on-chain) and give you a call.\n\n" +
     "Tap a starter, the <b>/</b> menu, or <code>/skills</code> to pick my tools. <code>/model</code> switches models.",
     { reply_markup: starterKeyboard });
@@ -169,8 +177,9 @@ async function startFlow(chatId: number, chatType?: string) {
     await send(chatId, "◈ <b>Urizen Alpha</b> is live here. @mention me or reply to me with a question, or use the <b>/</b> commands. In groups I run on the house key — no setup needed.");
     return;
   }
-  const cfg = chatLLM.get(chatId);
-  if (cfg) { await sendConnectedHome(chatId, cfg); return; }
+  const st = await getState(chatId);
+  const cfg = st.provider && st.key && st.model ? { providerId: st.provider, key: st.key, model: st.model } : null;
+  if (cfg) { await sendConnectedHome(chatId, cfg, st.wallet); return; }
   // first-touch: the branded Urizen × Telegram banner, then the connect button
   await tg("sendPhoto", { chat_id: chatId, photo: `${SITE}/img/bot-welcome.jpg`, caption: WELCOME_CAPTION, parse_mode: "HTML", reply_markup: { inline_keyboard: [[{ text: "⚡ Connect AI", callback_data: "ob:start" }]] } });
 }
@@ -228,7 +237,7 @@ async function answer(chatId: number, question: string, llm: LlmConfig, imgCtx: 
     const { text: ans, artifacts } = await runAlphaBotStream(question, [], {
       onStatus: (s) => { if (!shown) flush(`🧠 ${s}`); },
       onText: (full) => flush(full),
-    }, enabledFor(chatId), llm);
+    }, await enabledFor(chatId), llm);
     // final pass: render markdown as Telegram HTML; fall back to plain if Telegram rejects the markup
     const raw = (ans || "…").slice(0, 3900);
     const html = mdToHtml(raw);
@@ -260,7 +269,7 @@ async function answer(chatId: number, question: string, llm: LlmConfig, imgCtx: 
 
 // Ask a DM user to connect if they aren't set up yet. Returns the resolved llm, or null (and prompts).
 async function requireLlm(chatId: number, chatType?: string): Promise<LlmConfig | null> {
-  const llm = resolveLlm(chatId, chatType);
+  const llm = await resolveLlm(chatId, chatType);
   if (llm) return llm;
   if (chatType && chatType !== "private") { await send(chatId, "The bot isn't configured for this group yet."); return null; }
   // concise reconnect nudge (not the full welcome banner) — you can just paste your key to connect
@@ -310,12 +319,12 @@ export async function POST(req: Request) {
       const p = providerById(pid);
       const idx = Number(idxStr);
       const cur = pending.get(cid);
-      const key = cur?.key || chatLLM.get(cid)?.key;
+      const key = cur?.key || (await getCfg(cid))?.key;
       if (p && p.models[idx] && key) {
-        chatLLM.set(cid, { providerId: pid, key, model: p.models[idx].id });
+        await setLlm(cid, pid, key, p.models[idx].id);
         pending.delete(cid);
         // step 2 of onboarding: AI is connected — now prompt to connect a wallet (to trade).
-        const kb = { inline_keyboard: [...walletKeyboard(cType).inline_keyboard, ...starterKeyboard.inline_keyboard] };
+        const kb = { inline_keyboard: [...walletKeyboard(cid).inline_keyboard, ...starterKeyboard.inline_keyboard] };
         await editOrSend(cid, mid,
           `🎯 <b>AI connected</b> — ${p.label} · <code>${p.models[idx].id}</code>.\n\nNow connect your wallet to <b>trade</b> — non-custodial, you sign every trade, I never hold your keys. You can research without it, too.`,
           kb);
@@ -326,14 +335,15 @@ export async function POST(req: Request) {
     }
     if (data.startsWith("sk:")) {
       const id = data.slice(3);
-      const set = new Set(chatSkills.get(cid) ?? ALL_TOOL_IDS);
+      const set = new Set((await getState(cid)).skills ?? ALL_TOOL_IDS);
       set.has(id) ? set.delete(id) : set.add(id);
-      chatSkills.set(cid, set);
-      if (mid) await tg("editMessageReplyMarkup", { chat_id: cid, message_id: mid, reply_markup: skillsKeyboard(cid) });
+      const next = [...set];
+      await setSkills(cid, next);
+      if (mid) await tg("editMessageReplyMarkup", { chat_id: cid, message_id: mid, reply_markup: skillsKeyboard(next) });
       return new Response("ok", { status: 200 });
     }
     const ex = EXAMPLES.find((e) => e.code === data);
-    if (ex) { const llm = await requireLlm(cid, cType); if (llm) await answer(cid, ex.q, llm, { chatType: cType, cfg: chatLLM.get(cid) }); }
+    if (ex) { const llm = await requireLlm(cid, cType); if (llm) await answer(cid, ex.q, llm, { chatType: cType, cfg: (await getCfg(cid)) ?? undefined }); }
     return new Response("ok", { status: 200 });
   }
 
@@ -356,7 +366,7 @@ export async function POST(req: Request) {
         return new Response("ok", { status: 200 });
       }
       // connect immediately on a sensible default model so it's usable even if they skip the picker
-      chatLLM.set(chatId, { providerId: p.id, key: text, model: p.models[0].id });
+      await setLlm(chatId, p.id, text, p.models[0].id);
       pending.delete(chatId);
       await send(chatId, `✅ <b>Connected</b> on ${p.label}. Pick a model (or keep the default and just ask):`);
       await sendModelPicker(chatId, p.id);
@@ -372,29 +382,36 @@ export async function POST(req: Request) {
     return new Response("ok", { status: 200 });
   }
   if (text === "/model") {
-    const cfg = chatLLM.get(chatId);
+    const cfg = await getCfg(chatId);
     if (chatType && chatType !== "private") await send(chatId, "The group runs on the house model. Switch your own model in a direct message.");
     else if (cfg) await sendModelPicker(chatId, cfg.providerId);
     else await startFlow(chatId, chatType);
     return new Response("ok", { status: 200 });
   }
   if (text === "/forget") {
-    chatLLM.delete(chatId); pending.delete(chatId);
+    await clearAi(chatId); pending.delete(chatId);
     await send(chatId, "🧹 Done — your key is wiped from my memory. It was only ever held in memory for the session (never stored, never logged). Tip: you can also delete the message where you pasted it from this chat. Send /start to reconnect.");
     return new Response("ok", { status: 200 });
   }
-  if (text === "/skills") { await send(chatId, "Toggle which tools I can use — tap to switch on/off:", { reply_markup: skillsKeyboard(chatId) }); return new Response("ok", { status: 200 }); }
+  if (text === "/skills") { await send(chatId, "Toggle which tools I can use — tap to switch on/off:", { reply_markup: skillsKeyboard(await enabledFor(chatId)) }); return new Response("ok", { status: 200 }); }
   if (text === "/app" || text === "/trade" || text === "/wallet" || text === "/connectwallet") {
-    await send(chatId,
-      "🔗 <b>Connect your wallet</b>\n\nUrizen is <b>non-custodial</b> — I never hold your keys or your funds. You connect your own wallet and sign every trade yourself.\n\nTap below to open the Urizen terminal right here in Telegram, connect your wallet, and you're set.",
-      { reply_markup: walletKeyboard(chatType) });
+    const { wallet } = await getState(chatId);
+    if (wallet) {
+      await send(chatId,
+        `🔗 <b>Wallet connected</b> · <code>${wallet.slice(0, 6)}…${wallet.slice(-4)}</code>.\n\nYou're set to trade — non-custodial, you sign every trade yourself. Tap below any time to reopen the app.`,
+        { reply_markup: walletKeyboard(chatId) });
+    } else {
+      await send(chatId,
+        "🔗 <b>Connect your wallet</b>\n\nUrizen is <b>non-custodial</b> — I never hold your keys or your funds. You connect your own wallet and sign every trade yourself.\n\nTap below to open Urizen in your browser and connect — it links back here automatically, so I'll know you're set.",
+        { reply_markup: walletKeyboard(chatId) });
+    }
     return new Response("ok", { status: 200 });
   }
   if (text.startsWith("/image")) {
     const prompt = text.replace(/^\/image(@\w+)?\s*/, "").trim();
     if (!prompt) { await send(chatId, "Give me something to draw — e.g. <code>/image a bull charging down Wall Street</code>"); return new Response("ok", { status: 200 }); }
     await tg("sendChatAction", { chat_id: chatId, action: "upload_photo" });
-    await deliverImage(chatId, prompt, prompt, { chatType, cfg: chatLLM.get(chatId) });
+    await deliverImage(chatId, prompt, prompt, { chatType, cfg: (await getCfg(chatId)) ?? undefined });
     return new Response("ok", { status: 200 });
   }
 
@@ -402,7 +419,7 @@ export async function POST(req: Request) {
   const m = text.match(/^\/(\w+)(?:@\w+)?(?:\s+([\s\S]*))?$/);
   if (m && SLASH_MAP.has(m[1])) {
     const llm = await requireLlm(chatId, chatType);
-    if (llm) await answer(chatId, SLASH_MAP.get(m[1])!.prompt((m[2] || "").trim()), llm, { chatType, cfg: chatLLM.get(chatId) });
+    if (llm) await answer(chatId, SLASH_MAP.get(m[1])!.prompt((m[2] || "").trim()), llm, { chatType, cfg: (await getCfg(chatId)) ?? undefined });
     return new Response("ok", { status: 200 });
   }
 
@@ -418,6 +435,6 @@ export async function POST(req: Request) {
   }
 
   const llm = await requireLlm(chatId, chatType);
-  if (llm) await answer(chatId, question, llm, { chatType, cfg: chatLLM.get(chatId) });
+  if (llm) await answer(chatId, question, llm, { chatType, cfg: (await getCfg(chatId)) ?? undefined });
   return new Response("ok", { status: 200 });
 }

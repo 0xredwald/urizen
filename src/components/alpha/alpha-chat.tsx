@@ -120,6 +120,21 @@ export function AlphaChat() {
     }
   }, [isConnected, openConnectModal]);
 
+  // if opened from the bot with a signed tg param, report the connected wallet back so the bot can
+  // detect it (once per session). Signature is verified server-side; nothing sensitive is exposed.
+  const linkReported = useRef(false);
+  useEffect(() => {
+    if (linkReported.current || typeof window === "undefined" || !isConnected || !addr) return;
+    const q = new URLSearchParams(window.location.search);
+    const tg = q.get("tg"), sig = q.get("sig");
+    if (!tg || !sig) return;
+    linkReported.current = true;
+    void fetch("/api/telegram/link", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tg: Number(tg), address: addr, sig }),
+    }).catch(() => {});
+  }, [isConnected, addr]);
+
   // pin to bottom only when the user is already near it, and instantly (no smooth animation
   // re-firing on every streamed token — that's what made charts "jump around")
   useEffect(() => {
