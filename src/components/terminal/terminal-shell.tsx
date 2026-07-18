@@ -93,7 +93,10 @@ export function TerminalShell() {
   const [messages, setMessages] = useState<HMsg[]>([]);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
-  const [pendingTrade, setPendingTrade] = useState<ProposedTrade | null>(null);
+  // a QUEUE of proposed trades — the agent can propose several (a rebalance); each is signed in the chat
+  const [pendingTrades, setPendingTrades] = useState<ProposedTrade[]>([]);
+  const queueTrade = (t: ProposedTrade) => setPendingTrades((q) => [...q, t]);
+  const clearTrade = (i: number) => setPendingTrades((q) => q.filter((_, j) => j !== i));
   const [keyOpen, setKeyOpen] = useState(false);
   const [swapOpen, setSwapOpen] = useState(false);
   // ONE big board pop-up that holds MULTIPLE panel tiles (the user + agent add into it). Dims the
@@ -217,7 +220,7 @@ export function TerminalShell() {
           await wait(300);
         } else if (a.tool === "proposeTrade") {
           setStatus(`preparing ${a.side} ${a.symbol}…`);
-          setPendingTrade({ side: a.side, symbol: a.symbol, amount: a.amount, note: `the agent suggests ${a.side === "buy" ? "buying" : "selling"} ${a.symbol}.` });
+          queueTrade({ side: a.side, symbol: a.symbol, amount: a.amount, note: `${activeAgent?.name ?? "the agent"} suggests ${a.side === "buy" ? "buying" : "selling"} ${a.symbol}.` });
           await wait(300);
         }
       } catch { /* one bad action shouldn't kill the sequence */ }
@@ -236,7 +239,7 @@ export function TerminalShell() {
     if (tc) {
       setBusy(false); setStatus("");
       setMessages((m) => [...m, { role: "assistant", content: `raising a ${tc[1].toLowerCase()} ticket for ${tc[2].toUpperCase()}.` }]);
-      setPendingTrade({ side: tc[1].toLowerCase() as "buy" | "sell", symbol: tc[2].toUpperCase(), amount: parseFloat(tc[3]), note: "manual ticket" });
+      queueTrade({ side: tc[1].toLowerCase() as "buy" | "sell", symbol: tc[2].toUpperCase(), amount: parseFloat(tc[3]), note: "manual ticket" });
       return;
     }
     // /demo — a keyless preview of Horizon operating the chart, built from the REAL loaded candles
@@ -448,7 +451,7 @@ export function TerminalShell() {
 
         {/* RIGHT: the terminal agent */}
         <HorizonRail selected={selected} messages={messages} busy={busy} status={status} onAsk={ask}
-          pendingTrade={pendingTrade} taker={address ?? null} onClearTrade={() => setPendingTrade(null)} onSettings={() => setKeyOpen(true)} connected={isConnected}
+          pendingTrades={pendingTrades} taker={address ?? null} onClearTrade={clearTrade} onSettings={() => setKeyOpen(true)} connected={isConnected}
           agents={agents} activeAgent={activeAgent} onSelectAgent={selectAgent} onNewAgent={() => setNewAgentOpen(true)} />
       </div>
 
@@ -695,7 +698,7 @@ function renderMd(text: string): React.ReactNode {
 }
 
 // ── Horizon agent rail — a real chat that operates the terminal ──
-function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrade, taker, onClearTrade, onSettings, connected, agents, activeAgent, onSelectAgent, onNewAgent }: { selected: string; messages: HMsg[]; busy: boolean; status: string; onAsk: (t: string) => void; pendingTrade: ProposedTrade | null; taker: string | null; onClearTrade: () => void; onSettings: () => void; connected: boolean; agents: Agent[]; activeAgent: Agent | null; onSelectAgent: (id: string) => void; onNewAgent: () => void }) {
+function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrades, taker, onClearTrade, onSettings, connected, agents, activeAgent, onSelectAgent, onNewAgent }: { selected: string; messages: HMsg[]; busy: boolean; status: string; onAsk: (t: string) => void; pendingTrades: ProposedTrade[]; taker: string | null; onClearTrade: (i: number) => void; onSettings: () => void; connected: boolean; agents: Agent[]; activeAgent: Agent | null; onSelectAgent: (id: string) => void; onNewAgent: () => void }) {
   const [input, setInput] = useState("");
   const [agentMenu, setAgentMenu] = useState(false);
   const agentRef = useRef<HTMLDivElement>(null);
@@ -795,9 +798,10 @@ function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrade, ta
           );
         })}
       </div>
-      {pendingTrade && (
-        <div className="shrink-0 border-t border-border p-3 pb-0">
-          <TradeTicket trade={pendingTrade} taker={taker} onClose={onClearTrade} />
+      {pendingTrades.length > 0 && (
+        <div className="max-h-[46%] shrink-0 space-y-2 overflow-auto border-t border-border p-3 pb-0">
+          {pendingTrades.length > 1 && <div className="flex items-center justify-between px-0.5"><span className="font-mono text-[0.56rem] uppercase tracking-widest text-signal">{pendingTrades.length} trades to sign</span><button onClick={() => { for (let k = pendingTrades.length; k > 0; k--) onClearTrade(0); }} className="font-mono text-[0.56rem] uppercase tracking-widest text-muted-foreground hover:text-[#ff5a5a]">dismiss all</button></div>}
+          {pendingTrades.map((t, i) => <TradeTicket key={`${t.symbol}-${t.side}-${i}`} trade={t} taker={taker} onClose={() => onClearTrade(i)} />)}
         </div>
       )}
       <div className="relative shrink-0 border-t border-border p-3">

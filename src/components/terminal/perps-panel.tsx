@@ -13,10 +13,11 @@ const MARKETS = [
   { sym: "SOL", id: 2, pdp: 3 },
 ];
 type Level = { price: number; size: number; cum: number };
-type Book = { bids: Level[]; asks: Level[]; bestBid: number | null; bestAsk: number | null; mid: number | null; spreadBps: number | null };
+type Book = { bids: Level[]; asks: Level[]; bestBid: number | null; bestAsk: number | null; mid: number | null; spreadBps: number | null; mark: number | null; index: number | null; basisBps: number | null; change24h: number | null; oi: number | null };
 
 const fmtP = (n: number, dp: number) => n.toLocaleString(undefined, { minimumFractionDigits: dp, maximumFractionDigits: dp });
 const fmtS = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 3 });
+const compact = (n: number) => n >= 1e9 ? `${(n / 1e9).toFixed(2)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : `${n.toFixed(1)}`;
 
 export function PerpsPanel() {
   const [market, setMarket] = useState(MARKETS[0]);
@@ -54,6 +55,22 @@ export function PerpsPanel() {
           ))}
         </div>
       </div>
+      {/* funding / basis readout — mark vs index is the perp premium that drives funding */}
+      {book && (book.mark != null || book.basisBps != null) && (
+        <div className="grid grid-cols-4 gap-px border-b border-border bg-border/40 text-center">
+          {[
+            { k: "Mark", v: book.mark != null ? fmtP(book.mark, market.pdp) : "—", tone: "text-foreground" },
+            { k: "Index", v: book.index != null ? fmtP(book.index, market.pdp) : "—", tone: "text-muted-foreground" },
+            { k: "Basis", v: book.basisBps != null ? `${book.basisBps >= 0 ? "+" : ""}${book.basisBps.toFixed(1)}bp` : "—", tone: book.basisBps == null ? "text-muted-foreground" : book.basisBps >= 0 ? "text-signal" : "text-[#ff5a5a]" },
+            { k: "OI", v: book.oi != null ? compact(book.oi) : "—", tone: "text-muted-foreground" },
+          ].map((c) => (
+            <div key={c.k} className="bg-[#0b0b0d] px-1.5 py-1.5">
+              <div className="font-mono text-[0.5rem] uppercase tracking-widest text-muted-foreground/60">{c.k}</div>
+              <div className={`mt-0.5 font-mono text-[0.72rem] tabular-nums ${c.tone}`}>{c.v}</div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {err ? (
         <div className="grid flex-1 place-items-center px-4 text-center font-mono text-[0.66rem] uppercase tracking-widest text-muted-foreground/50">order book unavailable</div>

@@ -25,14 +25,17 @@ function levels(orders: Order[], desc: boolean, max = 14): Level[] {
   return sorted.map(([price, size]) => { cum += size; return { price, size, cum }; });
 }
 
+type Detail = { market_id?: number; mark_price?: string; index_price?: string; last_trade_price?: number; daily_price_change?: number; open_interest?: number };
+
 export async function GET(req: Request) {
   const marketId = Number(new URL(req.url).searchParams.get("market_id")) || 1;
   try {
-    const r = await fetch(`${LIGHTER}/orderBookOrders?market_id=${marketId}&limit=250`, {
-      next: { revalidate: 2 }, headers: { Accept: "application/json" },
-    });
-    if (!r.ok) return json({ error: `lighter ${r.status}`, bids: [], asks: [] }, { status: 200 });
-    const d = (await r.json()) as { asks?: Order[]; bids?: Order[] };
+    const [obR, detR] = await Promise.all([
+      fetch(`${LIGHTER}/orderBookOrders?market_id=${marketId}&limit=250`, { next: { revalidate: 2 }, headers: { Accept: "application/json" } }),
+      fetch(`${LIGHTER}/orderBookDetails?market_id=${marketId}`, { next: { revalidate: 5 }, headers: { Accept: "application/json" } }),
+    ]);
+    if (!obR.ok) return json({ error: `lighter ${obR.status}`, bids: [], asks: [] }, { status: 200 });
+    const d = (await obR.json()) as { asks?: Order[]; bids?: Order[] };
     const asks = levels(d.asks ?? [], false); // ascending price
     const bids = levels(d.bids ?? [], true);  // descending price
     const bestAsk = asks[0]?.price ?? null;
@@ -40,7 +43,23 @@ export async function GET(req: Request) {
     const mid = bestAsk != null && bestBid != null ? (bestAsk + bestBid) / 2 : (bestAsk ?? bestBid);
     const spread = bestAsk != null && bestBid != null ? bestAsk - bestBid : null;
     const spreadBps = spread != null && mid ? (spread / mid) * 10000 : null;
-    return json({ marketId, bids, asks, bestBid, bestAsk, mid, spread, spreadBps });
+
+    // funding / basis from market details (mark vs index = the perp premium that drives funding)
+    let mark: number | null = null, index: number | null = null, last: number | null = null;
+    let basisBps: number | null = null, change24h: number | null = null, oi: number | null = null;
+    if (detR.ok) {
+      const det = ((await detR.json()) as { order_book_details?: Detail[] })?.order_book_details ?? [];
+      const m = det.find((x) => x.market_id === marketId);
+      if (m) {
+        mark = Number(m.mark_price) || null;
+        index = Number(m.index_price) || null;
+        last = Number(m.last_trade_price) || null;
+        change24h = typeof m.daily_price_change === "number" ? m.daily_price_change : null;
+        oi = typeof m.open_interest === "number" ? m.open_interest : null;
+        if (mark != null && index) basisBps = ((mark - index) / index) * 10000;
+      }
+    }
+    return json({ marketId, bids, asks, bestBid, bestAsk, mid, spread, spreadBps, mark, index, last, basisBps, change24h, oi });
   } catch (e) {
     return json({ error: (e as Error).message, bids: [], asks: [] }, { status: 200 });
   }
