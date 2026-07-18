@@ -249,10 +249,10 @@ async function registerCommands() {
     ...SLASH.map((s) => ({ command: s.cmd, description: s.desc })),
   ];
   await tg("setMyCommands", { commands });
-  // modern touch: a persistent button by the input that opens the app as a Telegram Mini App.
-  // Requires the bot's domain to be set once in BotFather (/setdomain → urizenfund.com); until then
-  // Telegram just keeps the default commands button, so this is safe to call unconditionally.
-  await tg("setChatMenuButton", { menu_button: { type: "web_app", text: "Open Urizen", web_app: { url: APP } } });
+  // NO Mini App menu button — wallets can't work inside Telegram's webview (no injected provider,
+  // WalletConnect can't return), so a web_app just strands the user on a page that "doesn't know the
+  // state". Use the default commands menu; every wallet/trade action opens the real browser via a link.
+  await tg("setChatMenuButton", { menu_button: { type: "commands" } });
 }
 
 // Answer a question: stream the reply live (edit one message), then send any charts/images/strategy/swap.
