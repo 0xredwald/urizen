@@ -86,14 +86,15 @@ function skillsKeyboard(chatId: number) {
   return { inline_keyboard: rows };
 }
 
-// Connect-wallet button. In a DM it's a Telegram Mini App (web_app) so the terminal opens INSIDE
-// Telegram; in a group it's a plain link (web_app buttons aren't allowed there). Non-custodial: the
-// user connects + signs in their own wallet on the page. web_app needs the bot's domain registered
-// once in BotFather (/setdomain → urizenfund.com); until then use the link.
-function walletKeyboard(chatType?: string) {
+// Connect-wallet button. ALWAYS a plain link (opens the system browser), never a Telegram Mini App
+// (web_app): wallets can't pop up inside Telegram's in-app webview (no injected provider, and
+// WalletConnect deep-links don't return), so a web_app just strands the user on a page they can't
+// connect from. In the external browser the wallet (extension or the wallet's own browser) works.
+// Non-custodial: the user connects + signs in their own wallet on the page.
+function walletKeyboard(_chatType?: string) {
+  void _chatType;
   const url = `${APP}?connect=1`;
-  const btn = (!chatType || chatType === "private") ? { text: "🔗 Connect wallet", web_app: { url } } : { text: "🔗 Connect wallet", url };
-  return { inline_keyboard: [[btn]] };
+  return { inline_keyboard: [[{ text: "🔗 Connect wallet in browser", url }]] };
 }
 
 // Resolve the LLM to spend: the house key in a group/channel, the user's own connection in a DM.
@@ -246,8 +247,8 @@ async function answer(chatId: number, question: string, llm: LlmConfig, imgCtx: 
     if (swap) {
       const p = swap.proposal;
       const link = `${APP}?sell=${encodeURIComponent(p.sellSym)}&buy=${encodeURIComponent(p.buySym)}&amount=${encodeURIComponent(p.sellAmount)}`;
-      const priv = !imgCtx.chatType || imgCtx.chatType === "private";
-      const btn = priv ? { text: "↗ Open & sign in your wallet", web_app: { url: link } } : { text: "↗ Open & sign in your wallet", url: link };
+      // plain link (external browser) — signing needs the wallet to pop up, which it can't inside a Mini App
+      const btn = { text: "↗ Open & sign in your wallet", url: link };
       await send(chatId,
         `⚖️ <b>The trade is drawn.</b>\n<code>${p.sellAmount} ${p.sellSym}</code> → <code>${p.buySym}</code>\n\nYou sign it in your own wallet — I never hold your keys. Non-custodial, as it should be.`,
         { reply_markup: { inline_keyboard: [[btn]] } });
