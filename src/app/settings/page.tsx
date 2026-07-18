@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useAccount, useSignMessage } from "wagmi";
 import { SiteNav } from "@/components/site/site-nav";
 import { InlineKeySetup } from "@/components/terminal/key-modal";
 import { NewAgentModal } from "@/components/alpha/new-agent-modal";
@@ -34,6 +35,25 @@ export default function SettingsPage() {
   const remove = (id: string) => { deleteAgent(id); if (activeId === id) { setActiveId(null); try { localStorage.removeItem(ACTIVE_KEY); } catch { /* noop */ } } refresh(); };
   const create = (a: Agent) => { saveAgent(a); setActive(a.id); setNewOpen(false); refresh(); };
   const active = agents.find((a) => a.id === activeId) ?? agents[0] ?? null;
+
+  // sync agents to your wallet so they're shared with the Telegram bot (one signature; no keys leave)
+  const { address, isConnected } = useAccount();
+  const { signMessageAsync } = useSignMessage();
+  const [sync, setSync] = useState<"idle" | "signing" | "done" | "error">("idle");
+  const syncToWallet = async () => {
+    if (!address) return;
+    setSync("signing");
+    try {
+      const ts = Date.now();
+      const message = `URIZEN · sync my agents to this wallet\n${address}\n${ts}`;
+      const signature = await signMessageAsync({ message });
+      const payload = { address, activeId: active?.id, message, signature,
+        agents: agents.map((a) => ({ id: a.id, data: { name: a.name, mandate: a.mandate, risk: a.risk, note: a.note, instruments: a.instruments } })) };
+      const r = await fetch("/api/agents", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+      setSync(r.ok ? "done" : "error");
+    } catch { setSync("error"); }
+    setTimeout(() => setSync("idle"), 2600);
+  };
 
   return (
     <div className="min-h-screen bg-[#0a0a0b] text-foreground">
@@ -73,9 +93,17 @@ export default function SettingsPage() {
                 <div className="mb-5 flex items-end justify-between gap-4">
                   <div>
                     <h2 className="font-display text-xl tracking-tight">Agents</h2>
-                    <p className="mt-1 text-[0.84rem] text-muted-foreground">Name your agents and give each a persona. The active one runs the Terminal.</p>
+                    <p className="mt-1 text-[0.84rem] text-muted-foreground">Name your agents and give each a persona. The active one runs the Terminal — and, once synced to your wallet, the Telegram bot.</p>
                   </div>
-                  <button onClick={() => setNewOpen(true)} className="shrink-0 rounded-lg border border-signal/50 bg-signal/10 px-3.5 py-2 font-mono text-[0.66rem] uppercase tracking-widest text-signal transition-colors hover:bg-signal/20">＋ New</button>
+                  <div className="flex shrink-0 items-center gap-2">
+                    {isConnected && agents.length > 0 && (
+                      <button onClick={syncToWallet} disabled={sync === "signing"} title="Share these agents with the Telegram bot, tied to your wallet"
+                        className={`rounded-lg border px-3.5 py-2 font-mono text-[0.62rem] uppercase tracking-widest transition-colors ${sync === "done" ? "border-signal/50 bg-signal/15 text-signal" : sync === "error" ? "border-[#ff5a5a]/50 text-[#ff5a5a]" : "border-border text-muted-foreground hover:border-signal/40 hover:text-signal"}`}>
+                        {sync === "signing" ? "sign in wallet…" : sync === "done" ? "✓ synced to wallet" : sync === "error" ? "sync failed" : "☁ sync to wallet"}
+                      </button>
+                    )}
+                    <button onClick={() => setNewOpen(true)} className="rounded-lg border border-signal/50 bg-signal/10 px-3.5 py-2 font-mono text-[0.66rem] uppercase tracking-widest text-signal transition-colors hover:bg-signal/20">＋ New</button>
+                  </div>
                 </div>
 
                 {agents.length === 0 ? (

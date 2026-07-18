@@ -1,10 +1,10 @@
-import { runAlphaBotStream, HOUSE_MODELS, type LlmConfig } from "@/lib/alpha-server";
+import { runAlphaBotStream, HOUSE_MODELS, type LlmConfig, type BotPersona } from "@/lib/alpha-server";
 import { tgSendReturnId, tgEdit, mdToHtml } from "@/lib/telegram";
 import type { Artifact } from "@/lib/alpha-tools";
 import { aiImage, aiImageGemini, aiImageOpenRouter, cardUrl } from "@/lib/image-gen";
 import { configToCode } from "@/lib/agent-graph";
 import { PROVIDERS, providerById, detectBotProvider, looksLikeApiKey, llmFor, type ChatLLM } from "@/lib/bot-providers";
-import { getState, setLlm, setSkills, clearAi, tgLinkSig } from "@/lib/bot-store";
+import { getState, setLlm, setSkills, clearAi, tgLinkSig, getWalletAgents, selectWalletAgent, type WalletAgent } from "@/lib/bot-store";
 
 const SITE = "https://urizenfund.com";
 const APP = "https://urizenfund.com/alpha";
@@ -74,6 +74,18 @@ async function getCfg(chatId: number): Promise<ChatLLM | null> {
   const s = await getState(chatId);
   return s.provider && s.key && s.model ? { providerId: s.provider, key: s.key, model: s.model } : null;
 }
+// The persona the bot speaks in = the user's selected agent, keyed by their linked wallet (shared with
+// the app). No wallet / no agents → undefined (the default URIZEN oracle).
+async function personaFor(chatId: number): Promise<BotPersona | undefined> {
+  try {
+    const { wallet } = await getState(chatId);
+    if (!wallet) return undefined;
+    const agents = await getWalletAgents(wallet);
+    const active = agents.find((a) => a.active) ?? agents[0];
+    const d = active?.data;
+    return d?.name ? { name: d.name, mandate: d.mandate, risk: d.risk, note: d.note } : undefined;
+  } catch { return undefined; }
+}
 
 // Skills the user can toggle on/off (the agent's tools).
 const SKILL_TOGGLES: { id: string; label: string }[] = [
@@ -89,6 +101,11 @@ function skillsKeyboard(enabled: string[]) {
   const rows: { text: string; callback_data: string }[][] = [];
   for (let i = 0; i < SKILL_TOGGLES.length; i += 2) rows.push(SKILL_TOGGLES.slice(i, i + 2).map((s) => ({ text: `${en.has(s.id) ? "✅" : "⬜"} ${s.label}`, callback_data: `sk:${s.id}` })));
   return { inline_keyboard: rows };
+}
+
+// The user's wallet-keyed agents, one per row, active one checked.
+function agentsKeyboard(agents: WalletAgent[]) {
+  return { inline_keyboard: agents.map((a) => [{ text: `${a.active ? "✅ " : "◦ "}${a.data.name || a.id}${a.data.mandate ? ` · ${a.data.mandate}` : ""}`, callback_data: `ag:${a.id}` }]) };
 }
 
 // Connect-wallet button. ALWAYS a plain link (opens the system browser), never a Telegram Mini App
@@ -214,6 +231,7 @@ async function registerCommands() {
     { command: "skills", description: "Toggle which tools I use" },
     { command: "image", description: "Generate an image" },
     { command: "wallet", description: "Connect your wallet (non-custodial)" },
+    { command: "agents", description: "Pick your agent (persona) — synced from the app" },
     { command: "swap", description: "Swap tokens — /swap 100 USDG NVDA" },
     { command: "app", description: "Open the app to trade" },
     ...SLASH.map((s) => ({ command: s.cmd, description: s.desc })),
@@ -238,7 +256,7 @@ async function answer(chatId: number, question: string, llm: LlmConfig, imgCtx: 
     const { text: ans, artifacts } = await runAlphaBotStream(question, [], {
       onStatus: (s) => { if (!shown) flush(`🧠 ${s}`); },
       onText: (full) => flush(full),
-    }, await enabledFor(chatId), llm);
+    }, await enabledFor(chatId), llm, await personaFor(chatId));
     // final pass: render markdown as Telegram HTML; fall back to plain if Telegram rejects the markup
     const raw = (ans || "…").slice(0, 3900);
     const html = mdToHtml(raw);
@@ -343,6 +361,18 @@ export async function POST(req: Request) {
       if (mid) await tg("editMessageReplyMarkup", { chat_id: cid, message_id: mid, reply_markup: skillsKeyboard(next) });
       return new Response("ok", { status: 200 });
     }
+    if (data.startsWith("ag:")) {
+      const id = data.slice(3);
+      const { wallet } = await getState(cid);
+      if (wallet) {
+        await selectWalletAgent(wallet, id);
+        const agents = await getWalletAgents(wallet);
+        if (mid) await tg("editMessageReplyMarkup", { chat_id: cid, message_id: mid, reply_markup: agentsKeyboard(agents) });
+        const a = agents.find((x) => x.id === id);
+        await send(cid, `◈ Now speaking as <b>${a?.data.name || id}</b>${a?.data.mandate ? ` — <i>${a.data.mandate}</i>` : ""}. Ask me anything.`);
+      }
+      return new Response("ok", { status: 200 });
+    }
     const ex = EXAMPLES.find((e) => e.code === data);
     if (ex) { const llm = await requireLlm(cid, cType); if (llm) await answer(cid, ex.q, llm, { chatType: cType, cfg: (await getCfg(cid)) ?? undefined }); }
     return new Response("ok", { status: 200 });
@@ -406,6 +436,21 @@ export async function POST(req: Request) {
         "🔗 <b>Connect your wallet</b>\n\nUrizen is <b>non-custodial</b> — I never hold your keys or your funds. You connect your own wallet and sign every trade yourself.\n\nTap below to open Urizen in your browser and connect — it links back here automatically, so I'll know you're set.",
         { reply_markup: walletKeyboard(chatId) });
     }
+    return new Response("ok", { status: 200 });
+  }
+  if (text === "/agents" || text === "/agent" || text === "/persona") {
+    if (chatType && chatType !== "private") { await send(chatId, "Agents are personal — pick yours in a direct message with me."); return new Response("ok", { status: 200 }); }
+    const { wallet } = await getState(chatId);
+    if (!wallet) {
+      await send(chatId, "🔗 <b>Agents live on your wallet.</b> Connect your wallet first, then create agents in the app — they show up here to pick from and I'll speak in that persona.", { reply_markup: walletKeyboard(chatId) });
+      return new Response("ok", { status: 200 });
+    }
+    const agents = await getWalletAgents(wallet);
+    if (!agents.length) {
+      await send(chatId, `No agents yet on <code>${wallet.slice(0, 6)}…${wallet.slice(-4)}</code>. Create one in the app — a name, a mandate, a directive — and it appears here.\n\n<a href="${SITE}/settings">Open settings ↗</a>`);
+      return new Response("ok", { status: 200 });
+    }
+    await send(chatId, "◈ <b>Your agents</b> — tap one to make it active. I'll answer in that persona (its mandate + directive steer me).", { reply_markup: agentsKeyboard(agents) });
     return new Response("ok", { status: 200 });
   }
   if (text.startsWith("/image")) {

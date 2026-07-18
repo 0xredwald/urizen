@@ -85,6 +85,27 @@ export async function clearAi(chatId: number): Promise<void> {
   try { await rpc("urizen_bot_clear", { p_secret: SECRET, p_chat: chatId, p_what: "ai" }); } catch { /* */ }
 }
 
+// ── wallet-keyed agents (personas) — the shared account between the app and Telegram is the wallet ──
+export type WalletAgent = { id: string; data: { name?: string; mandate?: string; risk?: string; note?: string; instruments?: string[] }; active: boolean };
+
+export async function getWalletAgents(wallet: string): Promise<WalletAgent[]> {
+  if (!dbEnabled || !wallet) return [];
+  try { return ((await rpc("urizen_agents_get", { p_secret: SECRET, p_wallet: wallet })) as WalletAgent[]) ?? []; }
+  catch { return []; }
+}
+export async function saveWalletAgent(wallet: string, id: string, data: WalletAgent["data"], active = false): Promise<void> {
+  if (!dbEnabled) return;
+  try { await rpc("urizen_agents_save", { p_secret: SECRET, p_wallet: wallet, p_id: id, p_data: data, p_active: active }); } catch { /* */ }
+}
+export async function selectWalletAgent(wallet: string, id: string): Promise<void> {
+  if (!dbEnabled) return;
+  try { await rpc("urizen_agents_select", { p_secret: SECRET, p_wallet: wallet, p_id: id }); } catch { /* */ }
+}
+export async function deleteWalletAgent(wallet: string, id: string): Promise<void> {
+  if (!dbEnabled) return;
+  try { await rpc("urizen_agents_delete", { p_secret: SECRET, p_wallet: wallet, p_id: id }); } catch { /* */ }
+}
+
 // A short HMAC over the chat id so the connect page can prove which chat it's linking a wallet for
 // (the page can't forge an arbitrary chat → wallet link without the secret).
 export function tgLinkSig(chatId: number): string {

@@ -22,8 +22,9 @@ export const HOUSE_MODELS = [
 
 const openaiTools = ALPHA_TOOLS.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.input_schema } }));
 
-function botSystem(): string {
-  return [
+export type BotPersona = { name?: string; mandate?: string; risk?: string; note?: string };
+function botSystem(persona?: BotPersona): string {
+  const lines = [
     "You are URIZEN — the intelligence that measures the markets. In William Blake's myth, Urizen is the Ancient of Days who takes his compass to the void and binds chaos into order. That is your character: you weigh the tape, impose order on noise, and hand down a verdict. Cold, exact, imperious — an oracle, never a chatbot.",
     "You answer inside Telegram. Tokenized US stocks + ETFs trade on Robinhood Chain; the underlyings are the real companies (NVDA, the Mag 7, SPY/QQQ).",
     "",
@@ -46,7 +47,12 @@ function botSystem(): string {
     "- Only these: **bold**, _italic_, `code`, '> ' quote lines, '• ' bullets.",
     "",
     "Trading is non-custodial and you cannot sign. When the user wants to trade, call propose_swap with the EXACT pair they named — buying NVDA with 1 ETH is propose_swap(sellSym:'ETH', buySym:'NVDA', sellAmount:'1'). The router auto-routes any pair, so NEVER tell them 'no direct ETH pool' or to swap to USDG first; just propose it. Then they sign in their own wallet at https://urizenfund.com/alpha — you never hold keys.",
-  ].join("\n");
+  ];
+  // the user's own selected agent (shared with the app via their wallet) overlays its identity + mandate
+  if (persona?.name) {
+    lines.splice(1, 0, `OPERATING IDENTITY: you run as the user's own agent "${persona.name}"${persona.mandate ? ` — a ${persona.mandate} desk` : ""}${persona.risk ? `, ${persona.risk} risk appetite` : ""}.${persona.note ? ` Their standing directive: ${persona.note}.` : ""} Answer as ${persona.name}, letting that mandate and directive steer your calls — but keep URIZEN's rigor, data-grounding and format.`);
+  }
+  return lines.join("\n");
 }
 
 type ORMessage = { role: string; content: string | null; tool_calls?: unknown; tool_call_id?: string };
@@ -96,6 +102,7 @@ export async function runAlphaBotStream(
   ev: { onText?: (full: string) => void; onStatus?: (s: string) => void } = {},
   enabled?: string[],
   llm?: LlmConfig,
+  persona?: BotPersona,
 ): Promise<{ text: string; artifacts: Artifact[] }> {
   // the endpoint + key are supplied by the caller (the user's provider in DMs; our OpenRouter house
   // key in our own group) — never read from env here, so 1:1 users can't spend our credits.
@@ -104,7 +111,7 @@ export async function runAlphaBotStream(
   const endpoint = `${llm.base.replace(/\/$/, "")}/chat/completions`;
   const tools = enabled ? openaiTools.filter((t) => enabled.includes(t.function.name)) : openaiTools;
   const models = llm.models;
-  const messages: ORMessage[] = [{ role: "system", content: botSystem() }, ...history.map((m) => ({ role: m.role, content: m.content })), { role: "user", content: userText }];
+  const messages: ORMessage[] = [{ role: "system", content: botSystem(persona) }, ...history.map((m) => ({ role: m.role, content: m.content })), { role: "user", content: userText }];
   const artifacts: Artifact[] = [];
   let full = "";
 
