@@ -10,7 +10,7 @@ import { TradeTicket, type ProposedTrade } from "@/components/terminal/trade-tic
 import { ChartWorkspace } from "@/components/terminal/chart-workspace";
 import { KeyModal, InlineKeySetup } from "@/components/terminal/key-modal";
 import { NewsPanel, RatingsPanel, FundamentalsPanel, MacroPanel, PredictionsPanel, OnchainPanel } from "@/components/terminal/data-panels";
-import { Portfolio } from "@/components/terminal/portfolio";
+import { Portfolio, usePortfolio } from "@/components/terminal/portfolio";
 import { PerpsPanel } from "@/components/terminal/perps-panel";
 import { PhantomSwap } from "@/components/alpha/phantom-swap";
 import { TVEconCalendar, TVHeatmap } from "@/components/terminal/tv-widgets";
@@ -262,7 +262,12 @@ export function TerminalShell() {
     setMessages((m) => [...m, { role: "assistant", content: "" }]); // the bubble we stream into
     const patchLast = (content: string) => setMessages((m) => { const c = [...m]; for (let i = c.length - 1; i >= 0; i--) { if (c[i].role === "assistant") { c[i] = { ...c[i], content }; break; } } return c; });
     try {
-      const reply = await runHorizon(t, { symbol: selected, range: tf, candles, indicators: null, universe: STOCKS.map((s) => s.symbol), persona }, history, {
+      const reply = await runHorizon(t, {
+        symbol: selected, range: tf, candles, indicators: null, universe: STOCKS.map((s) => s.symbol), persona,
+        portfolio: { holdings, total: portfolioTotal, connected: portfolioConnected },
+        openCharts: charts.map((c) => c.symbol),
+        openPanels: panels.map((id) => ALL_PANELS.find((p) => p.id === id)?.title ?? id),
+      }, history, {
         onStatus: (s) => setStatus(s),
         onText: (visible) => { if (visible) patchLast(visible); },
       });
@@ -280,6 +285,8 @@ export function TerminalShell() {
     if (head) m[selected] = head.price;
     return m;
   }, [quotes, head, selected]);
+  // the user's live on-chain portfolio — shown in the pane AND fed to the agent's context
+  const { holdings, total: portfolioTotal, loading: portfolioLoading, connected: portfolioConnected } = usePortfolio(prices);
 
   // markets: real movers → quote map + gainers/losers
   useEffect(() => {
@@ -395,7 +402,7 @@ export function TerminalShell() {
             </table>
           </Pane>
           <Pane n={2} title="Portfolio" right={<button onClick={() => setSwapOpen(true)} className="font-mono text-[0.56rem] uppercase tracking-widest text-signal transition-colors hover:text-foreground">swap ↗</button>}>
-            <Portfolio prices={prices} onPick={setSelected} />
+            <Portfolio holdings={holdings} total={portfolioTotal} loading={portfolioLoading} connected={portfolioConnected} onPick={setSelected} />
           </Pane>
         </div>
 
@@ -700,7 +707,7 @@ function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrade, ta
   const scrollRef = useRef<HTMLDivElement>(null);
   const examples = [
     `analyse ${selected} and draw the trend`,
-    "mark support and resistance",
+    "how's my portfolio looking?",
     "add a 50-day MA and RSI",
     `any news moving ${selected}?`,
   ];

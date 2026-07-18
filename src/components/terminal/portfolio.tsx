@@ -10,14 +10,13 @@ import { resolveToken } from "@/lib/rialto";
 // The user's on-chain holdings on Robinhood Chain — reads ERC-20 balanceOf for USDG + every
 // tokenized equity in one multicall, values them with the live quote map, and lists non-zero
 // positions with a running total. Non-custodial, read-only. Replaces the (redundant) watchlist.
+// `usePortfolio` is the shared source so the terminal can also feed holdings to the agent.
 const RH = 4663;
 const fmt = (n: number, d = 2) => n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
 
-function Empty({ children }: { children: React.ReactNode }) {
-  return <div className="grid h-full place-items-center px-4 text-center font-mono text-[0.66rem] uppercase tracking-widest text-muted-foreground/50">{children}</div>;
-}
+export type Holding = { sym: string; bal: number; usd: number };
 
-export function Portfolio({ prices, onPick }: { prices: Record<string, number>; onPick: (s: string) => void }) {
+export function usePortfolio(prices: Record<string, number>): { holdings: Holding[]; total: number; loading: boolean; connected: boolean } {
   const { address, isConnected } = useAccount();
   const tokens = useMemo(() => ["USDG", ...STOCKS.map((s) => s.symbol)], []);
   const contracts = useMemo(() => tokens.map((sym) => ({
@@ -27,7 +26,7 @@ export function Portfolio({ prices, onPick }: { prices: Record<string, number>; 
   })), [tokens, address]);
   const { data, isLoading } = useReadContracts({ contracts, query: { enabled: !!address, refetchInterval: 30000 } });
 
-  const holdings = useMemo(() => {
+  const holdings = useMemo<Holding[]>(() => {
     if (!data) return [];
     return tokens.map((sym, i) => {
       const t = resolveToken(sym);
@@ -38,9 +37,16 @@ export function Portfolio({ prices, onPick }: { prices: Record<string, number>; 
     }).filter((h) => h.bal > 1e-6).sort((a, b) => b.usd - a.usd);
   }, [data, tokens, prices]);
   const total = holdings.reduce((s, h) => s + h.usd, 0);
+  return { holdings, total, loading: isLoading, connected: isConnected };
+}
 
-  if (!isConnected) return <Empty>connect wallet to see holdings</Empty>;
-  if (isLoading && !holdings.length) return <Empty>reading balances…</Empty>;
+function Empty({ children }: { children: React.ReactNode }) {
+  return <div className="grid h-full place-items-center px-4 text-center font-mono text-[0.66rem] uppercase tracking-widest text-muted-foreground/50">{children}</div>;
+}
+
+export function Portfolio({ holdings, total, loading, connected, onPick }: { holdings: Holding[]; total: number; loading: boolean; connected: boolean; onPick: (s: string) => void }) {
+  if (!connected) return <Empty>connect wallet to see holdings</Empty>;
+  if (loading && !holdings.length) return <Empty>reading balances…</Empty>;
   if (!holdings.length) return <Empty>no holdings yet</Empty>;
   return (
     <div className="flex h-full flex-col">

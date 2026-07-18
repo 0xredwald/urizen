@@ -24,7 +24,14 @@ export type HAction =
 
 export type HorizonReply = { say: string; actions: HAction[] };
 export type Persona = { name: string; mandate?: string; risk?: string; note?: string };
-export type HorizonCtx = { symbol: string; range: string; candles: Candle[]; indicators?: Indicators | null; universe: string[]; persona?: Persona | null };
+export type PortfolioCtx = { holdings: { sym: string; bal: number; usd: number }[]; total: number; connected: boolean };
+export type HorizonCtx = {
+  symbol: string; range: string; candles: Candle[]; indicators?: Indicators | null; universe: string[];
+  persona?: Persona | null;
+  portfolio?: PortfolioCtx | null;
+  openCharts?: string[]; // symbols on other charts
+  openPanels?: string[]; // panel ids open in the board
+};
 export type HMsg = { role: "user" | "assistant"; content: string };
 
 const MODEL_FALLBACK: Record<string, string> = { anthropic: "claude-sonnet-5", openrouter: "anthropic/claude-sonnet-5" };
@@ -54,6 +61,7 @@ function systemPrompt(ctx: HorizonCtx): string {
     `{"tool":"openPanel","panel":"news|gainers|losers|ratings|fundamentals|macro|predictions|onchain|calendar|heatmap|perps"} (add a panel to the board) · {"tool":"closePanel","panel":"…"}`,
     "",
     "RULES:",
+    "- You can SEE the user's on-chain PORTFOLIO and open WORKSPACE below. Use them: answer holdings questions from the real numbers, size proposeTrade against what they actually hold (e.g. 'trim NVDA' = sell part of their NVDA balance), and never invent positions they don't have.",
     "- For drawTrendline/marker, `t` MUST be a timestamp that appears in the CANDLES below, and `price` a real level from the data (a swing high/low, a close). Connect two real pivots for a trendline.",
     "- For drawHLine (support/resistance), use a real level from recent highs/lows.",
     "- Sequence sensibly: selectSymbol / setTimeframe first if needed, then indicators, then drawings.",
@@ -72,10 +80,19 @@ function grounding(ctx: HorizonCtx, userText: string): string {
     ? `price $${ind.price.toFixed(2)}, 1d ${(ind.change1d * 100).toFixed(1)}%, RSI ${ind.rsi14.toFixed(0)}, SMA20 ${ind.sma20.toFixed(2)}, SMA50 ${ind.sma50.toFixed(2)}, annVol ${(ind.volAnnual * 100).toFixed(0)}%, trend ${ind.trend}, regime ${ind.regime}`
     : "n/a";
   const rows = tail.map((k) => `${k.t}|${k.o.toFixed(2)}|${k.h.toFixed(2)}|${k.l.toFixed(2)}|${k.c.toFixed(2)}`).join("\n");
+  const p = ctx.portfolio;
+  const port = !p || !p.connected
+    ? "YOUR PORTFOLIO: wallet not connected"
+    : p.holdings.length
+      ? `YOUR PORTFOLIO ($${p.total.toFixed(0)} total): ${p.holdings.map((h) => `${h.sym} ${h.bal.toLocaleString(undefined, { maximumFractionDigits: 4 })}${h.usd ? ` ($${h.usd.toFixed(0)})` : ""}`).join(", ")}`
+      : "YOUR PORTFOLIO: connected, no holdings yet";
+  const workspace = `WORKSPACE: charts open — ${(ctx.openCharts?.length ? ctx.openCharts : [ctx.symbol]).join(", ")}${ctx.openPanels?.length ? ` · board panels — ${ctx.openPanels.join(", ")}` : ""}`;
   return [
     `CHART: ${ctx.symbol} · ${ctx.range} candles (each candle = ${ctx.range})`,
     `INDICATORS: ${indLine}`,
     `SWING HIGH: $${hi.h.toFixed(2)} @ t=${hi.t}  ·  SWING LOW: $${lo.l.toFixed(2)} @ t=${lo.t}`,
+    port,
+    workspace,
     `CANDLES (t=unix_sec | o|h|l|c), oldest→newest:`,
     rows,
     "",
