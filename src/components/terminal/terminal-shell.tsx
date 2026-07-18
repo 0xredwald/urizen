@@ -11,6 +11,7 @@ import { ChartWorkspace } from "@/components/terminal/chart-workspace";
 import { KeyModal, InlineKeySetup } from "@/components/terminal/key-modal";
 import { NewsPanel, RatingsPanel, FundamentalsPanel, MacroPanel, PredictionsPanel, OnchainPanel } from "@/components/terminal/data-panels";
 import { Portfolio } from "@/components/terminal/portfolio";
+import { PerpsPanel } from "@/components/terminal/perps-panel";
 import { PhantomSwap } from "@/components/alpha/phantom-swap";
 import { TVEconCalendar, TVHeatmap } from "@/components/terminal/tv-widgets";
 import { UrizenMark } from "@/components/brand/marks";
@@ -45,7 +46,7 @@ const ALL_PANELS: { id: string; title: string }[] = [
   { id: "news", title: "News" }, { id: "gainers", title: "Top gainers" }, { id: "losers", title: "Top losers" },
   { id: "ratings", title: "Analyst ratings" }, { id: "fundamentals", title: "Fundamentals" },
   { id: "macro", title: "Macro" }, { id: "predictions", title: "Prediction markets" }, { id: "onchain", title: "On-chain" },
-  { id: "calendar", title: "Economic calendar" }, { id: "heatmap", title: "Heatmap" },
+  { id: "calendar", title: "Economic calendar" }, { id: "heatmap", title: "Heatmap" }, { id: "perps", title: "Perps order book" },
 ];
 
 function Logo({ s, size = 18 }: { s: string; size?: number }) {
@@ -123,6 +124,7 @@ export function TerminalShell() {
       case "news": return <NewsPanel symbol={selected} />;
       case "calendar": return <TVEconCalendar />;
       case "heatmap": return <TVHeatmap />;
+      case "perps": return <PerpsPanel />;
       case "ratings": return <RatingsPanel symbol={selected} />;
       case "fundamentals": return <FundamentalsPanel symbol={selected} />;
       case "macro": return <MacroPanel />;
