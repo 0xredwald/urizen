@@ -106,6 +106,22 @@ export async function deleteWalletAgent(wallet: string, id: string): Promise<voi
   try { await rpc("urizen_agents_delete", { p_secret: SECRET, p_wallet: wallet, p_id: id }); } catch { /* */ }
 }
 
+// ── WalletConnect session store (a JSON blob per namespace — the SignClient keyvalue store, and the
+// active session topic) so the bot can restore a session across serverless invocations and push a
+// sign request straight to the user's wallet. ──
+export async function wcGet(ns: string): Promise<Record<string, unknown>> {
+  if (!dbEnabled) return {};
+  try { return ((await rpc("urizen_wc_get", { p_secret: SECRET, p_ns: ns })) as Record<string, unknown>) ?? {}; } catch { return {}; }
+}
+export async function wcSet(ns: string, blob: Record<string, unknown>): Promise<void> {
+  if (!dbEnabled) return;
+  try { await rpc("urizen_wc_set", { p_secret: SECRET, p_ns: ns, p_blob: blob }); } catch { /* */ }
+}
+export async function wcDel(ns: string): Promise<void> {
+  if (!dbEnabled) return;
+  try { await rpc("urizen_wc_del", { p_secret: SECRET, p_ns: ns }); } catch { /* */ }
+}
+
 // A short HMAC over the chat id so the connect page can prove which chat it's linking a wallet for
 // (the page can't forge an arbitrary chat → wallet link without the secret).
 export function tgLinkSig(chatId: number): string {
