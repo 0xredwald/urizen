@@ -1,4 +1,6 @@
-import { getDefaultConfig } from "@rainbow-me/rainbowkit";
+import { connectorsForWallets } from "@rainbow-me/rainbowkit";
+import { injectedWallet, metaMaskWallet, coinbaseWallet, walletConnectWallet, rainbowWallet } from "@rainbow-me/rainbowkit/wallets";
+import { createConfig, http } from "wagmi";
 import { defineChain } from "viem";
 import { base } from "viem/chains";
 
@@ -11,13 +13,28 @@ export const robinhoodChain = defineChain({
   blockExplorers: { default: { name: "Blockscout", url: "https://robinhoodchain.blockscout.com" } },
 });
 
-// WalletConnect project id — set NEXT_PUBLIC_WC_PROJECT_ID to enable mobile/WC wallets.
-// Injected wallets (MetaMask, Rabby, Phantom, Coinbase extension) work without it.
-const projectId = process.env.NEXT_PUBLIC_WC_PROJECT_ID || "urizen_alpha_default";
+// WalletConnect project id — set NEXT_PUBLIC_WC_PROJECT_ID (free from cloud.reown.com) to enable
+// mobile / WalletConnect wallets. WITHOUT a real id, WalletConnect 403s (the "urizen_alpha_default"
+// placeholder), so we omit WC entirely and rely on injected wallets (browser extension / in-app
+// browser), which need no project id and are the reliable path.
+export const projectId = process.env.NEXT_PUBLIC_WC_PROJECT_ID || "urizen_alpha_default";
+export const hasRealWc = projectId !== "urizen_alpha_default" && projectId.length > 10;
 
-export const wagmiConfig = getDefaultConfig({
-  appName: "Urizen",
-  projectId,
+const connectors = connectorsForWallets(
+  [
+    {
+      groupName: "Recommended",
+      // injectedWallet is pure window.ethereum — no WalletConnect dependency, works in extensions and
+      // most in-app browsers. metaMask/coinbase fall back to injected on desktop.
+      wallets: [injectedWallet, metaMaskWallet, coinbaseWallet, ...(hasRealWc ? [rainbowWallet, walletConnectWallet] : [])],
+    },
+  ],
+  { appName: "Urizen", projectId },
+);
+
+export const wagmiConfig = createConfig({
+  connectors,
   chains: [robinhoodChain, base], // Base is needed to sign x402 (USDC) payments
+  transports: { [robinhoodChain.id]: http(), [base.id]: http() },
   ssr: true,
 });

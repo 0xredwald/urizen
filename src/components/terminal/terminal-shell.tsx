@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ConnectButton } from "@rainbow-me/rainbowkit";
-import { useAccount } from "wagmi";
+import { ConnectButton, useConnectModal } from "@rainbow-me/rainbowkit";
+import { useAccount, useConnect } from "wagmi";
 import { type ChartHandle } from "@/components/terminal/kline-chart";
 import { HorizonCursor, type CursorHandle } from "@/components/terminal/horizon-cursor";
 import { TradeTicket, type ProposedTrade } from "@/components/terminal/trade-ticket";
@@ -623,23 +623,23 @@ function AddChartButton({ disabled, onPick, quotes, openSymbols }: { disabled?: 
 
 // ── wallet gate — the agent is gated to your wallet; connect first, then add a key ──
 function WalletGate() {
+  const { go, inTelegram } = useConnectFlow();
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-5 px-6 text-center">
       <span className="grid h-14 w-14 place-items-center rounded-2xl border border-signal/30 bg-signal/10">
         <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="text-signal"><path d="M3 7a2 2 0 0 1 2-2h13a1 1 0 0 1 1 1v2" /><path d="M3 7v10a2 2 0 0 0 2 2h14a1 1 0 0 0 1-1v-3" /><path d="M20 11v4h-4a2 2 0 0 1 0-4z" /></svg>
       </span>
       <div className="space-y-1.5">
-        <h3 className="font-display text-lg tracking-tight text-foreground">Connect your wallet</h3>
-        <p className="mx-auto max-w-[15rem] text-[0.82rem] leading-relaxed text-muted-foreground">The agent runs against your wallet — connect to unlock the chat. You&apos;ll sign every trade yourself.</p>
+        <h3 className="font-display text-lg tracking-tight text-foreground">{inTelegram ? "Open in your browser" : "Connect your wallet"}</h3>
+        <p className="mx-auto max-w-[16rem] text-[0.82rem] leading-relaxed text-muted-foreground">
+          {inTelegram
+            ? "Wallets can't pop up inside Telegram. Open the terminal in your browser, then connect there — the agent runs against your wallet."
+            : "The agent runs against your wallet — connect to unlock the chat. You'll sign every trade yourself."}
+        </p>
       </div>
-      <ConnectButton.Custom>
-        {({ openConnectModal, mounted }) => (
-          <button onClick={openConnectModal} disabled={!mounted}
-            className="rounded-lg border border-signal/50 bg-signal/15 px-6 py-2.5 font-mono text-[0.74rem] font-medium uppercase tracking-[0.14em] text-signal transition-colors hover:bg-signal/25">
-            Connect wallet
-          </button>
-        )}
-      </ConnectButton.Custom>
+      <button onClick={go} className="rounded-lg border border-signal/50 bg-signal/15 px-6 py-2.5 font-mono text-[0.74rem] font-medium uppercase tracking-[0.14em] text-signal transition-colors hover:bg-signal/25">
+        {inTelegram ? "Open in browser ↗" : "Connect wallet"}
+      </button>
       <p className="font-mono text-[0.58rem] uppercase tracking-widest text-muted-foreground/40">then add a model key · or use free mode</p>
     </div>
   );
@@ -897,14 +897,35 @@ function SymbolSearch({ onPick, quotes }: { onPick: (s: string) => void; quotes:
   );
 }
 
+// Robust connect: prefer an INJECTED wallet (browser extension / in-app browser — no WalletConnect,
+// which is broken without a real project id). Inside a Telegram Mini App there's no injected wallet,
+// so offer to re-open the terminal in the system browser where the wallet works. Modal as last resort.
+type WinExt = Window & { ethereum?: unknown; Telegram?: { WebApp?: { openLink?: (u: string) => void; initData?: string } } };
+function useConnectFlow() {
+  const { connect, connectors } = useConnect();
+  const { openConnectModal } = useConnectModal();
+  const injected = connectors.find((c) => c.type === "injected") ?? connectors[0];
+  const w = (typeof window !== "undefined" ? window : undefined) as WinExt | undefined;
+  const inTelegram = !!w?.Telegram?.WebApp && !w?.ethereum;
+  const go = () => {
+    if (!w) return;
+    if (w.ethereum && injected) { connect({ connector: injected }); return; }
+    const tg = w.Telegram?.WebApp;
+    if (tg?.openLink) { tg.openLink(window.location.href); return; } // opens the external browser
+    openConnectModal?.();
+  };
+  return { go, inTelegram };
+}
+
 // ── a clean custom connect button (no default RainbowKit chrome) ──
 function ConnectWalletButton() {
+  const { go, inTelegram } = useConnectFlow();
   return (
     <ConnectButton.Custom>
-      {({ account, chain, openConnectModal, openAccountModal, openChainModal, mounted }) => {
+      {({ account, chain, openAccountModal, openChainModal, mounted }) => {
         const connected = mounted && !!account && !!chain;
         if (!connected)
-          return <button onClick={openConnectModal} className="rounded-md border border-signal/50 bg-signal/10 px-4 py-1.5 font-mono text-[0.72rem] font-medium uppercase tracking-[0.12em] text-signal transition-colors hover:bg-signal/20">Connect</button>;
+          return <button onClick={go} className="rounded-md border border-signal/50 bg-signal/10 px-4 py-1.5 font-mono text-[0.72rem] font-medium uppercase tracking-[0.12em] text-signal transition-colors hover:bg-signal/20">{inTelegram ? "Open in browser" : "Connect"}</button>;
         if (chain.unsupported)
           return <button onClick={openChainModal} className="rounded-md border border-[#ff5a5a]/50 bg-[#ff5a5a]/10 px-4 py-1.5 font-mono text-[0.72rem] uppercase tracking-[0.12em] text-[#ff5a5a] transition-colors hover:bg-[#ff5a5a]/20">Wrong network</button>;
         return (
