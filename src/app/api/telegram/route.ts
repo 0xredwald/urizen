@@ -214,6 +214,7 @@ async function registerCommands() {
     { command: "skills", description: "Toggle which tools I use" },
     { command: "image", description: "Generate an image" },
     { command: "wallet", description: "Connect your wallet (non-custodial)" },
+    { command: "swap", description: "Swap tokens — /swap 100 USDG NVDA" },
     { command: "app", description: "Open the app to trade" },
     ...SLASH.map((s) => ({ command: s.cmd, description: s.desc })),
   ];
@@ -412,6 +413,26 @@ export async function POST(req: Request) {
     if (!prompt) { await send(chatId, "Give me something to draw — e.g. <code>/image a bull charging down Wall Street</code>"); return new Response("ok", { status: 200 }); }
     await tg("sendChatAction", { chat_id: chatId, action: "upload_photo" });
     await deliverImage(chatId, prompt, prompt, { chatType, cfg: (await getCfg(chatId)) ?? undefined });
+    return new Response("ok", { status: 200 });
+  }
+  // manual swap through Rialto — /swap 100 USDG NVDA (amount, from, to). Non-custodial: opens a
+  // pre-filled sign card in your browser. Buy a stock with USDG, or sell it back for USDG.
+  if (text.startsWith("/swap") || text.startsWith("/buy") || text.startsWith("/sell")) {
+    const buy = text.startsWith("/buy"), sell = text.startsWith("/sell");
+    const m = text.match(/^\/(?:swap|buy|sell)(?:@\w+)?\s+([\d.]+)\s+([A-Za-z]+)(?:\s+(?:->|to|for)?\s*([A-Za-z]+))?/i);
+    if (!m) {
+      await send(chatId, "Set up a swap:\n<code>/swap 100 USDG NVDA</code> — amount, from, to\n<code>/buy 100 NVDA</code> · <code>/sell 5 NVDA</code> (vs USDG)");
+      return new Response("ok", { status: 200 });
+    }
+    const amount = m[1];
+    let from = m[2].toUpperCase(), to = (m[3] || "").toUpperCase();
+    if (buy && !m[3]) { to = from; from = "USDG"; }        // /buy 100 NVDA  → USDG→NVDA
+    else if (sell && !m[3]) { to = "USDG"; }               // /sell 5 NVDA   → NVDA→USDG
+    if (!to) to = "USDG";
+    const link = `${APP}?sell=${encodeURIComponent(from)}&buy=${encodeURIComponent(to)}&amount=${encodeURIComponent(amount)}`;
+    await send(chatId,
+      `⚖️ <b>Swap</b> · <code>${amount} ${from}</code> → <code>${to}</code>\n\nNon-custodial — you sign it in your own wallet. Opens pre-filled, ready to sign.`,
+      { reply_markup: { inline_keyboard: [[{ text: "↗ Open & sign in your wallet", url: link }]] } });
     return new Response("ok", { status: 200 });
   }
 
