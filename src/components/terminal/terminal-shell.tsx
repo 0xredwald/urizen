@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ConnectButton, useConnectModal } from "@rainbow-me/rainbowkit";
-import { useAccount, useConnect } from "wagmi";
+import { useAccount, useDisconnect } from "wagmi";
 import { type ChartHandle } from "@/components/terminal/kline-chart";
 import { HorizonCursor, type CursorHandle } from "@/components/terminal/horizon-cursor";
 import { TradeTicket, type ProposedTrade } from "@/components/terminal/trade-ticket";
@@ -902,17 +902,14 @@ function SymbolSearch({ onPick, quotes }: { onPick: (s: string) => void; quotes:
 // so offer to re-open the terminal in the system browser where the wallet works. Modal as last resort.
 type WinExt = Window & { ethereum?: unknown; Telegram?: { WebApp?: { openLink?: (u: string) => void; initData?: string } } };
 function useConnectFlow() {
-  const { connect, connectors } = useConnect();
   const { openConnectModal } = useConnectModal();
-  const injected = connectors.find((c) => c.type === "injected") ?? connectors[0];
   const w = (typeof window !== "undefined" ? window : undefined) as WinExt | undefined;
   const inTelegram = !!w?.Telegram?.WebApp && !w?.ethereum;
   const go = () => {
-    if (!w) return;
-    if (w.ethereum && injected) { connect({ connector: injected }); return; }
-    const tg = w.Telegram?.WebApp;
-    if (tg?.openLink) { tg.openLink(window.location.href); return; } // opens the external browser
-    openConnectModal?.();
+    // inside a Telegram Mini App a wallet can't pop up — bounce to the external browser instead
+    const tg = w?.Telegram?.WebApp;
+    if (inTelegram && tg?.openLink) { tg.openLink(window.location.href); return; }
+    openConnectModal?.(); // RainbowKit modal (injected / MetaMask / Coinbase — reliable, updates state)
   };
   return { go, inTelegram };
 }
@@ -920,6 +917,10 @@ function useConnectFlow() {
 // ── a clean custom connect button (no default RainbowKit chrome) ──
 function ConnectWalletButton() {
   const { go, inTelegram } = useConnectFlow();
+  const { disconnect } = useDisconnect();
+  const [menu, setMenu] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => { const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setMenu(false); }; document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h); }, []);
   return (
     <ConnectButton.Custom>
       {({ account, chain, openAccountModal, openChainModal, mounted }) => {
@@ -929,9 +930,24 @@ function ConnectWalletButton() {
         if (chain.unsupported)
           return <button onClick={openChainModal} className="rounded-md border border-[#ff5a5a]/50 bg-[#ff5a5a]/10 px-4 py-1.5 font-mono text-[0.72rem] uppercase tracking-[0.12em] text-[#ff5a5a] transition-colors hover:bg-[#ff5a5a]/20">Wrong network</button>;
         return (
-          <button onClick={openAccountModal} className="flex items-center gap-2 rounded-md border border-border bg-white/[0.03] px-3 py-1.5 font-mono text-[0.72rem] text-foreground transition-colors hover:border-signal/40">
-            <span className="h-1.5 w-1.5 rounded-full bg-signal" />{account.displayName}
-          </button>
+          <div ref={ref} className="relative">
+            <button onClick={() => setMenu((v) => !v)} className="flex items-center gap-2 rounded-md border border-border bg-white/[0.03] px-3 py-1.5 font-mono text-[0.72rem] text-foreground transition-colors hover:border-signal/40">
+              <span className="h-1.5 w-1.5 rounded-full bg-signal" />{account.displayName}<span className="text-muted-foreground/50">▾</span>
+            </button>
+            {menu && (
+              <div className="absolute right-0 top-full z-[70] mt-1.5 w-52 overflow-hidden rounded-xl border border-border bg-[#0d0d10] p-1 shadow-2xl">
+                <div className="px-2.5 py-2 font-mono text-[0.62rem] text-muted-foreground/70">
+                  <div className="text-signal">● connected</div>
+                  <div className="mt-0.5 truncate text-foreground/80">{account.address}</div>
+                  {account.displayBalance && <div className="mt-0.5 text-muted-foreground">{account.displayBalance}</div>}
+                </div>
+                <div className="my-1 h-px bg-border" />
+                <Link href="/settings" onClick={() => setMenu(false)} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-mono text-[0.68rem] uppercase tracking-wide text-muted-foreground transition-colors hover:bg-white/[0.04] hover:text-foreground">⚙ Settings &amp; agents</Link>
+                <button onClick={() => { setMenu(false); openAccountModal(); }} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-mono text-[0.68rem] uppercase tracking-wide text-muted-foreground transition-colors hover:bg-white/[0.04] hover:text-foreground">◎ Account details</button>
+                <button onClick={() => { setMenu(false); disconnect(); }} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-mono text-[0.68rem] uppercase tracking-wide text-muted-foreground transition-colors hover:bg-[#ff5a5a]/15 hover:text-[#ff5a5a]">⎋ Disconnect</button>
+              </div>
+            )}
+          </div>
         );
       }}
     </ConnectButton.Custom>

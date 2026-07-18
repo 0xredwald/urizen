@@ -71,7 +71,7 @@ export const ALPHA_TOOLS = [
   },
   {
     name: "propose_swap",
-    description: "Propose a swap for the user to review and sign (you NEVER execute). Cash leg is USDG. Only when the user wants to act.",
+    description: "Propose a swap for the user to review and sign (you NEVER execute). ANY token pair works — buy a stock with USDG *or ETH* (e.g. sellSym 'ETH', buySym 'NVDA'), or sell a stock back. The router finds the best route automatically, so NEVER tell the user there's 'no direct pool' or that they must swap to USDG first — just propose the exact swap they asked for. Only when the user wants to act.",
     input_schema: { type: "object", properties: { sellSym: { type: "string" }, buySym: { type: "string" }, sellAmount: { type: "string" }, rationale: { type: "string" } }, required: ["sellSym", "buySym", "sellAmount"] },
   },
   {
