@@ -3,7 +3,7 @@ import { tgSendReturnId, tgEdit, mdToHtml } from "@/lib/telegram";
 import type { Artifact } from "@/lib/alpha-tools";
 import { aiImage, aiImageGemini, aiImageOpenRouter, cardUrl } from "@/lib/image-gen";
 import { configToCode } from "@/lib/agent-graph";
-import { PROVIDERS, providerById, llmFor, type ChatLLM } from "@/lib/bot-providers";
+import { PROVIDERS, providerById, detectBotProvider, looksLikeApiKey, llmFor, type ChatLLM } from "@/lib/bot-providers";
 
 const SITE = "https://urizenfund.com";
 const APP = "https://urizenfund.com/alpha";
@@ -263,7 +263,10 @@ async function requireLlm(chatId: number, chatType?: string): Promise<LlmConfig 
   const llm = resolveLlm(chatId, chatType);
   if (llm) return llm;
   if (chatType && chatType !== "private") { await send(chatId, "The bot isn't configured for this group yet."); return null; }
-  await startFlow(chatId, chatType);
+  // concise reconnect nudge (not the full welcome banner) — you can just paste your key to connect
+  await send(chatId,
+    "Connect your AI to chat — paste your API key here (OpenRouter · OpenAI · Gemini · xAI · Groq) and I'll wire it up, or tap below to pick a provider.",
+    { reply_markup: { inline_keyboard: [[{ text: "⚡ Connect AI", callback_data: "ob:start" }]] } });
   return null;
 }
 
@@ -341,18 +344,24 @@ export async function POST(req: Request) {
   const text = (msg?.text || "").trim();
   if (!chatId || !text) return new Response("ok", { status: 200 });
 
-  // capture a pasted API key while mid-onboarding (DMs only; a key never looks like a command)
-  const pend = pending.get(chatId);
-  if (pend?.step === "key" && !text.startsWith("/")) {
-    const p = providerById(pend.providerId)!;
-    if (p.keyPrefix && !text.startsWith(p.keyPrefix)) {
-      await send(chatId, `That doesn't look like a ${p.label} key (they start with <code>${p.keyPrefix}</code>). Paste it again, or /start to pick another provider.`);
-    } else {
-      pending.set(chatId, { step: "model", providerId: pend.providerId, key: text });
-      await send(chatId, "✅ Key saved for this session.");
-      await sendModelPicker(chatId, pend.providerId);
+  // Capture a pasted API key (DMs only). STATELESS: a key connects you whether or not the onboarding
+  // step survived the serverless cold start — we honor the picked provider if `pending` is still here,
+  // otherwise detect the provider from the key's shape. This kills the "key → /start again" bug.
+  if ((!chatType || chatType === "private") && looksLikeApiKey(text)) {
+    const pend = pending.get(chatId);
+    const p = pend ? providerById(pend.providerId) : detectBotProvider(text);
+    if (p) {
+      if (pend && p.keyPrefix && !text.startsWith(p.keyPrefix)) {
+        await send(chatId, `That doesn't look like a ${p.label} key (they start with <code>${p.keyPrefix}</code>). Paste it again, or /start to pick another provider.`);
+        return new Response("ok", { status: 200 });
+      }
+      // connect immediately on a sensible default model so it's usable even if they skip the picker
+      chatLLM.set(chatId, { providerId: p.id, key: text, model: p.models[0].id });
+      pending.delete(chatId);
+      await send(chatId, `✅ <b>Connected</b> on ${p.label}. Pick a model (or keep the default and just ask):`);
+      await sendModelPicker(chatId, p.id);
+      return new Response("ok", { status: 200 });
     }
-    return new Response("ok", { status: 200 });
   }
 
   // hard commands

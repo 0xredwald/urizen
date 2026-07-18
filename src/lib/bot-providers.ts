@@ -75,6 +75,21 @@ export const PROVIDERS: Provider[] = [
 
 export const providerById = (id: string): Provider | undefined => PROVIDERS.find((p) => p.id === id);
 
+// Detect the provider straight from a pasted key's shape — so onboarding is STATELESS and a key
+// connects you even if the serverless webhook lost the in-memory onboarding step. Most specific first.
+// (`sk-` is shared by OpenAI + DeepSeek → default to OpenAI; DeepSeek users pick it from the button.)
+export function detectBotProvider(key: string): Provider | undefined {
+  const k = key.trim();
+  if (k.startsWith("sk-or-")) return providerById("openrouter");
+  if (k.startsWith("xai-")) return providerById("xai");
+  if (k.startsWith("gsk_")) return providerById("groq");
+  if (k.startsWith("AIza")) return providerById("google");
+  if (k.startsWith("sk-")) return providerById("openai");
+  return undefined;
+}
+// Does this DM message look like an API key (a single long token with a known prefix)? — vs a question.
+export const looksLikeApiKey = (text: string): boolean => /^(sk-|xai-|gsk_|AIza)[A-Za-z0-9_-]{12,}$/.test(text.trim());
+
 // A user's resolved DM config: which provider, their key, and the chosen model.
 export type ChatLLM = { providerId: string; key: string; model: string };
 
