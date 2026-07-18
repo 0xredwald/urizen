@@ -78,6 +78,32 @@ async function getCfg(chatId: number): Promise<ChatLLM | null> {
 }
 const EXPLORER = "https://robinhoodchain.blockscout.com";
 
+// Start a WalletConnect pairing: send the wc: uri + per-wallet buttons, and await the in-wallet
+// approval in the background (after response, so Telegram doesn't retry). Returns false if WC isn't
+// configured or init failed (caller can fall back to the browser link).
+async function sendWalletConnect(chatId: number): Promise<boolean> {
+  if (!wcEnabled()) return false;
+  try {
+    const { uri, approved } = await startPairing(chatId);
+    const enc = encodeURIComponent(uri);
+    await send(chatId,
+      "🔗 <b>Connect your wallet</b>\n\nApprove once in your wallet — then every trade signs right there, no browser. Tap your wallet below, or paste this into its WalletConnect scanner:\n\n<code>" + uri + "</code>",
+      { reply_markup: { inline_keyboard: [
+        [{ text: "🦊 MetaMask", url: `https://metamask.app.link/wc?uri=${enc}` }, { text: "🌈 Rainbow", url: `https://rnbwapp.com/wc?uri=${enc}` }],
+        [{ text: "🛡 Trust", url: `https://link.trustwallet.com/wc?uri=${enc}` }],
+      ] } });
+    after(async () => {
+      try {
+        const address = await approved;
+        if (address) { await setWallet(chatId, address.toLowerCase()); await send(chatId, `✅ <b>Wallet connected</b> · <code>${address.slice(0, 6)}…${address.slice(-4)}</code>. Trades now come straight to your wallet to sign.`); }
+        else await send(chatId, "Pairing didn't complete — tap <b>Connect wallet</b> or /wallet to try again.");
+      } catch { /* best effort */ }
+    });
+    return true;
+  } catch { return false; }
+}
+const walletConnectButton = { inline_keyboard: [[{ text: "🔗 Connect wallet", callback_data: "wc:pair" }]] };
+
 // Execute a swap: if the wallet is paired over WalletConnect, PUSH the tx straight to the wallet to
 // sign (no link); otherwise fall back to the pre-filled sign card in the app.
 async function pushOrLinkSwap(chatId: number, sellSym: string, buySym: string, amount: string): Promise<void> {
@@ -204,13 +230,14 @@ const starterKeyboard = { inline_keyboard: [[EXAMPLES[0], EXAMPLES[1]], [EXAMPLE
 async function sendConnectedHome(chatId: number, cfg: ChatLLM, wallet?: string) {
   const p = providerById(cfg.providerId)!;
   const walletLine = wallet
-    ? `\n🔗 Wallet connected · <code>${wallet.slice(0, 6)}…${wallet.slice(-4)}</code> — ready to trade.`
-    : "\n🔗 No wallet yet — <code>/wallet</code> to connect one and trade.";
+    ? `\n🔗 Wallet connected · <code>${wallet.slice(0, 6)}…${wallet.slice(-4)}</code> — trades sign in your wallet.`
+    : "\n🔗 Connect your wallet to trade — you'll sign right in your wallet.";
+  const kb = wallet ? starterKeyboard : { inline_keyboard: [...walletConnectButton.inline_keyboard, ...starterKeyboard.inline_keyboard] };
   await send(chatId,
     `◈ <b>Urizen Alpha</b> — connected on <b>${p.label}</b> · <code>${cfg.model}</code>.${walletLine}\n\n` +
     "Ask me anything about stocks — I pull real data (charts, SEC fundamentals, ratings, news, macro, Polymarket odds, on-chain) and give you a call.\n\n" +
     "Tap a starter, the <b>/</b> menu, or <code>/skills</code> to pick my tools. <code>/model</code> switches models.",
-    { reply_markup: starterKeyboard });
+    { reply_markup: kb });
 }
 const WELCOME_CAPTION =
   "◈ <b>Urizen Alpha</b>\nYour on-chain equity-research desk — real data, real calls, right in chat.\n\n" +
@@ -365,10 +392,10 @@ export async function POST(req: Request) {
       if (p && p.models[idx] && key) {
         await setLlm(cid, pid, key, p.models[idx].id);
         pending.delete(cid);
-        // step 2 of onboarding: AI is connected — now prompt to connect a wallet (to trade).
-        const kb = { inline_keyboard: [...walletKeyboard(cid).inline_keyboard, ...starterKeyboard.inline_keyboard] };
+        // step 2 of onboarding: AI is connected — now pair a wallet (WalletConnect) so trades sign in-wallet.
+        const kb = { inline_keyboard: [...walletConnectButton.inline_keyboard, ...starterKeyboard.inline_keyboard] };
         await editOrSend(cid, mid,
-          `🎯 <b>AI connected</b> — ${p.label} · <code>${p.models[idx].id}</code>.\n\nNow connect your wallet to <b>trade</b> — non-custodial, you sign every trade, I never hold your keys. You can research without it, too.`,
+          `🎯 <b>AI connected</b> — ${p.label} · <code>${p.models[idx].id}</code>.\n\nNow <b>connect your wallet</b> — you'll sign every trade right in your wallet, non-custodial, I never hold your keys. Or just start researching.`,
           kb);
       } else {
         await sendProviderPicker(cid, mid);
@@ -394,6 +421,10 @@ export async function POST(req: Request) {
         const a = agents.find((x) => x.id === id);
         await send(cid, `◈ Now speaking as <b>${a?.data.name || id}</b>${a?.data.mandate ? ` — <i>${a.data.mandate}</i>` : ""}. Ask me anything.`);
       }
+      return new Response("ok", { status: 200 });
+    }
+    if (data === "wc:pair") {
+      if (!(await sendWalletConnect(cid))) await send(cid, "🔗 Connect your wallet in your browser:", { reply_markup: walletKeyboard(cid) });
       return new Response("ok", { status: 200 });
     }
     const ex = EXAMPLES.find((e) => e.code === data);
@@ -455,28 +486,8 @@ export async function POST(req: Request) {
       await send(chatId, `🔗 <b>Wallet connected</b> · <code>${sess.address.slice(0, 6)}…${sess.address.slice(-4)}</code> — trades sign right in your wallet, no browser. <b>/disconnect</b> to unlink.`);
       return new Response("ok", { status: 200 });
     }
-    if (wcEnabled()) {
-      // pair over WalletConnect → after this, the bot pushes each trade straight to the wallet to sign
-      try {
-        const { uri, approved } = await startPairing(chatId);
-        const enc = encodeURIComponent(uri);
-        await send(chatId,
-          "🔗 <b>Connect your wallet</b>\n\nApprove once in your wallet — then every trade signs right there, no browser. Tap your wallet below, or paste this into its WalletConnect scanner:\n\n<code>" + uri + "</code>",
-          { reply_markup: { inline_keyboard: [
-            [{ text: "🦊 MetaMask", url: `https://metamask.app.link/wc?uri=${enc}` }, { text: "🌈 Rainbow", url: `https://rnbwapp.com/wc?uri=${enc}` }],
-            [{ text: "🛡 Trust", url: `https://link.trustwallet.com/wc?uri=${enc}` }],
-          ] } });
-        after(async () => {
-          try {
-            const address = await approved;
-            if (address) { await setWallet(chatId, address.toLowerCase()); await send(chatId, `✅ <b>Wallet paired</b> · <code>${address.slice(0, 6)}…${address.slice(-4)}</code>. Trades now come straight to your wallet to sign.`); }
-            else await send(chatId, "Pairing didn't complete — <b>/wallet</b> to try again.");
-          } catch { /* best effort */ }
-        });
-        return new Response("ok", { status: 200 });
-      } catch { /* WalletConnect init failed → fall through to the browser link */ }
-    }
-    // no WalletConnect configured → browser link fallback
+    if (await sendWalletConnect(chatId)) return new Response("ok", { status: 200 });
+    // no WalletConnect configured / init failed → browser link fallback
     await send(chatId, "🔗 <b>Connect your wallet</b> — open Urizen in your browser and connect:", { reply_markup: walletKeyboard(chatId) });
     return new Response("ok", { status: 200 });
   }
