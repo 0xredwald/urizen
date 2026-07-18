@@ -5,9 +5,10 @@ import type { DeepPartial, Styles } from "klinecharts"; // type-only import — 
 import type { Candle } from "@/lib/quant";
 
 // KLineChart (v10) wrapped for the terminal. Browser-only — klinecharts touches `window` at module
-// load, so it's dynamically imported inside the effect (never at top level / SSR). Exposes an
-// imperative handle so the Horizon agent (P3) can draw overlays and add indicators programmatically,
-// and map (timestamp, price) → screen pixels for the visible cursor.
+// load, so it's dynamically imported inside the effect (never at top level / SSR). The chart LOADS ITS
+// OWN DATA via setDataLoader: getBars("init") pulls the newest window, getBars("backward") pages older
+// history as you scroll left (full on-chain history), and subscribeBar polls the newest candle so the
+// chart updates live 24/7. Exposes an imperative handle so the agent can draw + map coords.
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Chart = any;
@@ -39,7 +40,6 @@ const styles = {
       last: { upColor: SIGNAL, downColor: RED, line: { style: "dashed", dashedValue: [3, 3] }, text: { color: "#04140a" } },
       high: { color: "#8a8a8f" }, low: { color: "#8a8a8f" },
     },
-    // OHLC legend only on crosshair hover — keeps small multi-chart panels clean
     tooltip: { showRule: "follow_cross", legend: { color: "#f2f1ec" }, rect: { color: "rgba(10,10,11,0.9)", borderColor: "rgba(242,241,236,0.1)" } },
   },
   indicator: {
@@ -53,7 +53,6 @@ const styles = {
     horizontal: { line: { color: "rgba(52,240,3,0.4)" }, text: { backgroundColor: SIGNAL, color: "#04140a" } },
     vertical: { line: { color: "rgba(52,240,3,0.4)" }, text: { backgroundColor: "rgba(52,240,3,0.15)", color: SIGNAL } },
   },
-  // agent drawings — all signal green
   overlay: {
     point: { color: SIGNAL, borderColor: "rgba(52,240,3,0.25)", activeColor: SIGNAL },
     line: { color: SIGNAL },
@@ -65,86 +64,124 @@ const styles = {
 
 const toKLine = (c: Candle[]) => c.map((k) => ({ timestamp: k.t * 1000, open: k.o, high: k.h, low: k.l, close: k.c, volume: k.v }));
 
-// smaller timeframes (1D/5D) are intraday → minute period so the x-axis shows time, not just dates
-const periodFor = (range?: string): { type: string; span: number } =>
-  range === "1D" ? { type: "minute", span: 5 } : range === "5D" ? { type: "minute", span: 15 } : { type: "day", span: 1 };
+// interval → KLineChart period (minute periods show time on the axis; day/week show dates)
+const periodFor = (interval: string): { type: string; span: number } => {
+  switch (interval) {
+    case "1m": return { type: "minute", span: 1 };
+    case "5m": return { type: "minute", span: 5 };
+    case "15m": return { type: "minute", span: 15 };
+    case "1h": return { type: "hour", span: 1 };
+    case "4h": return { type: "hour", span: 4 };
+    case "1D": return { type: "day", span: 1 };
+    case "1W": return { type: "week", span: 1 };
+    default: return { type: "minute", span: 15 };
+  }
+};
 
-export const KlineChart = forwardRef<ChartHandle, { candles: Candle[]; symbol: string; range?: string; precision?: number }>(
-  function KlineChart({ candles, symbol, range, precision = 2 }, ref) {
+async function fetchOhlc(symbol: string, interval: string, before?: number): Promise<Candle[]> {
+  const q = new URLSearchParams({ symbol, interval });
+  if (before) q.set("before", String(before));
+  try {
+    const d = await fetch(`/api/quant/ohlc?${q.toString()}`, { cache: "no-store" }).then((r) => r.json());
+    return (d?.candles as Candle[]) ?? [];
+  } catch { return []; }
+}
+
+export const KlineChart = forwardRef<ChartHandle, { symbol: string; interval: string; precision?: number }>(
+  function KlineChart({ symbol, interval, precision = 2 }, ref) {
     const boxRef = useRef<HTMLDivElement>(null);
     const chartRef = useRef<Chart>(null);
     const overlayIds = useRef<string[]>([]);
     const indicatorIds = useRef<string[]>([]);
-    const dataRef = useRef<Candle[]>(candles);
-    dataRef.current = candles;
+    // keep the latest symbol/interval reachable inside the (stable) data-loader closures
+    const sym = useRef(symbol); sym.current = symbol;
+    const itv = useRef(interval); itv.current = interval;
+    const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+    // build the data loader for the current symbol/interval
+    const makeLoader = () => ({
+      getBars: async (p: { type: string; callback: (d: unknown[], more?: boolean) => void }) => {
+        if (p.type === "init") {
+          const c = await fetchOhlc(sym.current, itv.current);
+          p.callback(toKLine(c), c.length > 0); // allow backward paging
+        } else if (p.type === "backward") {
+          // page older history before the earliest candle currently held
+          const list = chartRef.current?.getDataList?.() ?? [];
+          const earliest = list.length ? Math.floor(list[0].timestamp / 1000) : undefined;
+          const c = await fetchOhlc(sym.current, itv.current, earliest);
+          p.callback(toKLine(c), c.length > 0);
+        } else {
+          p.callback([], false);
+        }
+      },
+      // live: poll the newest candle and feed it in (updates the last bar or appends a new one)
+      subscribeBar: (p: { callback: (d: unknown) => void }) => {
+        if (pollRef.current) clearInterval(pollRef.current);
+        pollRef.current = setInterval(async () => {
+          const c = await fetchOhlc(sym.current, itv.current);
+          const last = c[c.length - 1];
+          if (last) p.callback(toKLine([last])[0]);
+        }, 12000);
+      },
+      unsubscribeBar: () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } },
+    });
 
     // init once
     useEffect(() => {
       let disposed = false;
-      let chart: Chart = null;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let disposeFn: ((el: any) => void) | null = null;
+      let disposeFn: ((el: HTMLElement) => void) | null = null;
       const el = boxRef.current;
       if (!el) return;
       import("klinecharts").then((kc) => {
         if (disposed || !boxRef.current) return;
         disposeFn = kc.dispose;
-        chart = kc.init(boxRef.current, { styles });
+        const chart: Chart = kc.init(boxRef.current, { styles });
         chartRef.current = chart;
-        chart.setSymbol({ ticker: symbol, pricePrecision: precision, volumePrecision: 0 });
-        chart.setPeriod(periodFor(range));
-        chart.setDataLoader({
-          // static dataset from our API: hand back everything on init, nothing on paging
-          getBars: (p: { type: string; callback: (d: unknown[], more?: boolean) => void }) => {
-            p.callback(p.type === "init" ? toKLine(dataRef.current) : [], false);
-          },
-        });
+        chart.setSymbol({ ticker: sym.current, pricePrecision: precision, volumePrecision: 0 });
+        chart.setPeriod(periodFor(itv.current));
+        chart.setDataLoader(makeLoader());
         indicatorIds.current = [chart.createIndicator("VOL", false)].filter(Boolean);
         const ro = new ResizeObserver(() => chart?.resize());
         ro.observe(boxRef.current);
-        // stash the observer on the chart so cleanup can reach it
         chart.__ro = ro;
       });
       return () => {
         disposed = true;
+        if (pollRef.current) clearInterval(pollRef.current);
         try { chartRef.current?.__ro?.disconnect(); } catch { /* noop */ }
         if (disposeFn && el) { try { disposeFn(el); } catch { /* noop */ } }
         chartRef.current = null;
       };
-      // init once; symbol/data changes are handled by the reload effect below (no re-init flicker)
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // reload data when candles/symbol change (re-set symbol + reload)
+    // symbol / interval change → retarget + reset the loader (re-triggers init getBars, no flicker of history)
     useEffect(() => {
       const chart = chartRef.current;
       if (!chart) return;
-      overlayIds.current = []; // drawings are per-instrument; clear on switch
+      overlayIds.current = []; // drawings are per-instrument
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
       chart.setSymbol({ ticker: symbol, pricePrecision: precision, volumePrecision: 0 });
-      chart.setPeriod(periodFor(range));
-      chart.setDataLoader({
-        getBars: (p: { type: string; callback: (d: unknown[], more?: boolean) => void }) => {
-          p.callback(p.type === "init" ? toKLine(dataRef.current) : [], false);
-        },
-      });
-    }, [candles, symbol, range, precision]);
+      chart.setPeriod(periodFor(interval));
+      chart.setDataLoader(makeLoader());
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [symbol, interval, precision]);
 
     useImperativeHandle(ref, (): ChartHandle => ({
       addIndicator: (name) => {
         const chart = chartRef.current; if (!chart) return;
-        // MA/EMA/BOLL/SAR overlay the candle pane; oscillators (RSI/MACD/KDJ/VOL) get their own sub-pane
         const overlayInd = ["MA", "EMA", "SMA", "BOLL", "SAR"].includes(name);
         const id = overlayInd ? chart.createIndicator({ name }, false, { id: "candle_pane" }) : chart.createIndicator(name, false);
         if (typeof id === "string") indicatorIds.current.push(id);
       },
       removeIndicators: () => {
-        indicatorIds.current.forEach((id) => chartRef.current?.removeIndicator?.(id));
+        indicatorIds.current.forEach((id) => chartRef.current?.removeIndicator?.({ id }));
         indicatorIds.current = [];
       },
       removeLastIndicator: () => {
         const id = indicatorIds.current.pop();
         if (!id) return false;
-        chartRef.current?.removeIndicator?.(id);
+        chartRef.current?.removeIndicator?.({ id });
         return true;
       },
       createOverlay: (name, points, extra = {}) => {
@@ -152,8 +189,7 @@ export const KlineChart = forwardRef<ChartHandle, { candles: Candle[]; symbol: s
         if (typeof id === "string") overlayIds.current.push(id);
       },
       startDraw: (name) => {
-        // no points → KLineChart enters interactive drawing (user clicks to place the points)
-        const id = chartRef.current?.createOverlay({ name });
+        const id = chartRef.current?.createOverlay({ name }); // no points → interactive draw
         if (typeof id === "string") overlayIds.current.push(id);
       },
       drawHLine: (price) => {
@@ -164,7 +200,7 @@ export const KlineChart = forwardRef<ChartHandle, { candles: Candle[]; symbol: s
       removeLastOverlay: () => {
         const id = overlayIds.current.pop();
         if (!id) return false;
-        chartRef.current?.removeOverlay?.(id);
+        chartRef.current?.removeOverlay?.({ id });
         return true;
       },
       hasDrawings: () => overlayIds.current.length > 0,
@@ -174,7 +210,7 @@ export const KlineChart = forwardRef<ChartHandle, { candles: Candle[]; symbol: s
         const r = boxRef.current?.getBoundingClientRect();
         return r ? { x: r.left + c.x, y: r.top + c.y } : null;
       },
-      lastTimestamp: () => { const d = dataRef.current; return d.length ? d[d.length - 1].t * 1000 : null; },
+      lastTimestamp: () => { const d = chartRef.current?.getDataList?.() ?? []; return d.length ? d[d.length - 1].timestamp : null; },
     }), []);
 
     return <div ref={boxRef} className="h-full w-full" />;

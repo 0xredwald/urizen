@@ -220,6 +220,54 @@ export async function getCandles(
     .sort((a, b) => a.t - b.t);
 }
 
+// ── generic pool OHLCV for ANY tokenized-equity on RH (24/7 on-chain candles) ──────────────
+const poolCache = new Map<string, string | null>();
+
+/** Discover the deepest USD pool for a token on Robinhood Chain (cached in-module). */
+export async function getDeepestPool(token: string): Promise<string | null> {
+  const key = token.toLowerCase();
+  if (poolCache.has(key)) return poolCache.get(key)!;
+  try {
+    const r = await fetch(
+      `${GT}/networks/${ROBINHOOD_CHAIN.geckoterminalSlug}/tokens/${token}/pools`,
+      { next: { revalidate: 3600 }, headers: { Accept: "application/json" } },
+    );
+    if (!r.ok) { poolCache.set(key, null); return null; }
+    const j = (await r.json()) as { data?: { id?: string; attributes?: { address?: string; reserve_in_usd?: string } }[] };
+    let best: string | null = null, deepest = -1;
+    for (const p of j?.data ?? []) {
+      const addr = p?.attributes?.address ?? (typeof p?.id === "string" ? p.id.split("_")[1] : null);
+      const reserve = Number(p?.attributes?.reserve_in_usd) || 0;
+      if (addr && reserve > deepest) { deepest = reserve; best = addr; }
+    }
+    poolCache.set(key, best);
+    return best;
+  } catch { poolCache.set(key, null); return null; }
+}
+
+/** GeckoTerminal pool OHLCV, priced in USD for `token`, oldest→newest. `before` pages older history. */
+export async function getPoolCandles(
+  pool: string, token: string,
+  timeframe: "minute" | "hour" | "day", aggregate: number,
+  opts: { limit?: number; before?: number } = {},
+): Promise<Candle[]> {
+  const q = new URLSearchParams({ aggregate: String(aggregate), limit: String(opts.limit ?? 1000), currency: "usd", token });
+  if (opts.before) q.set("before_timestamp", String(opts.before));
+  try {
+    const r = await fetch(
+      `${GT}/networks/${ROBINHOOD_CHAIN.geckoterminalSlug}/pools/${pool}/ohlcv/${timeframe}?${q.toString()}`,
+      { next: { revalidate: 15 }, headers: { Accept: "application/json" } },
+    );
+    if (!r.ok) return [];
+    const j = (await r.json()) as { data?: { attributes?: { ohlcv_list?: number[][] } } };
+    const list: number[][] = j?.data?.attributes?.ohlcv_list ?? [];
+    return list
+      .map((row) => ({ t: row[0], o: row[1], h: row[2], l: row[3], c: row[4], v: row[5] }))
+      .filter((k) => Number.isFinite(k.c))
+      .sort((a, b) => a.t - b.t);
+  } catch { return []; }
+}
+
 /** GeckoTerminal OHLCV → a simple close-price series for a sparkline/chart. */
 export async function getPriceHistory(
   timeframe: "day" | "hour" | "minute" = "hour",

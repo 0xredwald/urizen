@@ -10,7 +10,7 @@ import { getActiveBinding, FREE_MODEL } from "./agents";
 export type HAction =
   | { tool: "selectSymbol"; symbol: string }
   | { tool: "openChart"; symbol: string }
-  | { tool: "setTimeframe"; range: "1D" | "5D" | "1M" | "3M" | "6M" | "1Y" }
+  | { tool: "setTimeframe"; range: "1m" | "5m" | "15m" | "1h" | "1D" | "1W" }
   | { tool: "addIndicator"; name: "MA" | "EMA" | "BOLL" | "RSI" | "MACD" | "KDJ" | "VOL" }
   | { tool: "clearIndicators" }
   | { tool: "drawTrendline"; from: { t: number; price: number }; to: { t: number; price: number }; label?: string }
@@ -46,7 +46,7 @@ function systemPrompt(ctx: HorizonCtx): string {
     "Put NOTHING after the closing fence. Omit the whole block when no action is needed.",
     "An @source in the user message (@news @sec @macro @market @ratings @onchain @polymarket) = consult that data — checkNews and/or openPanel the matching panel.",
     "Each HAction in the array is one of:",
-    `{"tool":"selectSymbol","symbol":"TSLA"} (retarget the active chart) · {"tool":"openChart","symbol":"TSLA"} (open a NEW chart, up to 4 — a playground) · {"tool":"setTimeframe","range":"1D|5D|1M|3M|6M|1Y"} (1D/5D are intraday)`,
+    `{"tool":"selectSymbol","symbol":"TSLA"} (retarget the active chart) · {"tool":"openChart","symbol":"TSLA"} (open a NEW chart, up to 4 — a playground) · {"tool":"setTimeframe","range":"1m|5m|15m|1h|1D|1W"} (candle interval; data is live 24/7 on-chain)`,
     `{"tool":"addIndicator","name":"MA|EMA|BOLL|RSI|MACD|KDJ|VOL"} · {"tool":"clearIndicators"}`,
     `{"tool":"drawTrendline","from":{"t":<unix_sec>,"price":<n>},"to":{"t":<unix_sec>,"price":<n>},"label":"uptrend"}`,
     `{"tool":"drawHLine","price":<n>,"label":"support"} · {"tool":"marker","t":<unix_sec>,"price":<n>,"text":"breakout"}`,
@@ -73,7 +73,7 @@ function grounding(ctx: HorizonCtx, userText: string): string {
     : "n/a";
   const rows = tail.map((k) => `${k.t}|${k.o.toFixed(2)}|${k.h.toFixed(2)}|${k.l.toFixed(2)}|${k.c.toFixed(2)}`).join("\n");
   return [
-    `CHART: ${ctx.symbol} · ${ctx.range} (${ctx.range === "1D" || ctx.range === "5D" ? "intraday" : "daily"} candles)`,
+    `CHART: ${ctx.symbol} · ${ctx.range} candles (each candle = ${ctx.range})`,
     `INDICATORS: ${indLine}`,
     `SWING HIGH: $${hi.h.toFixed(2)} @ t=${hi.t}  ·  SWING LOW: $${lo.l.toFixed(2)} @ t=${lo.t}`,
     `CANDLES (t=unix_sec | o|h|l|c), oldest→newest:`,

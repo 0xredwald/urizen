@@ -10,6 +10,8 @@ import { TradeTicket, type ProposedTrade } from "@/components/terminal/trade-tic
 import { ChartWorkspace } from "@/components/terminal/chart-workspace";
 import { KeyModal, InlineKeySetup } from "@/components/terminal/key-modal";
 import { NewsPanel, RatingsPanel, FundamentalsPanel, MacroPanel, PredictionsPanel, OnchainPanel } from "@/components/terminal/data-panels";
+import { Portfolio } from "@/components/terminal/portfolio";
+import { PhantomSwap } from "@/components/alpha/phantom-swap";
 import { TVEconCalendar, TVHeatmap } from "@/components/terminal/tv-widgets";
 import { UrizenMark } from "@/components/brand/marks";
 import { STOCKS } from "@/lib/stocks";
@@ -29,15 +31,18 @@ import type { Candle } from "@/lib/quant";
 
 type Quote = { price: number; changePct: number };
 type Mover = { symbol: string; name: string; price: number; changePct: number };
-const RANGES = ["1D", "5D", "1M", "3M", "6M", "1Y"] as const;
-type Range = (typeof RANGES)[number];
+// the timeframe IS the candle interval (1 candle = this) — 24/7 on-chain data, full history, live
+const INTERVALS = ["1m", "5m", "15m", "1h", "1D", "1W"] as const;
+type Interval = (typeof INTERVALS)[number];
 const logo = (s: string) => `https://financialmodelingprep.com/image-stock/${s}.png`;
 const fmt = (n: number, d = 2) => n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
 const pct = (n: number) => `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
 
 // the panels the user (and the agent) can add/close in the centre workspace
+// extra panels the user (or agent) can summon into the board — the default view already shows
+// markets, portfolio, chart, news and the agent; these are the on-demand additions.
 const ALL_PANELS: { id: string; title: string }[] = [
-  { id: "watch", title: "Watchlist" }, { id: "news", title: "News" }, { id: "gainers", title: "Top gainers" }, { id: "losers", title: "Top losers" },
+  { id: "news", title: "News" }, { id: "gainers", title: "Top gainers" }, { id: "losers", title: "Top losers" },
   { id: "ratings", title: "Analyst ratings" }, { id: "fundamentals", title: "Fundamentals" },
   { id: "macro", title: "Macro" }, { id: "predictions", title: "Prediction markets" }, { id: "onchain", title: "On-chain" },
   { id: "calendar", title: "Economic calendar" }, { id: "heatmap", title: "Heatmap" },
@@ -74,7 +79,7 @@ export function TerminalShell() {
   const [charts, setCharts] = useState<{ id: string; symbol: string }[]>([{ id: "c1", symbol: "NVDA" }]);
   const [activeId, setActiveId] = useState("c1");
   const cidRef = useRef(1);
-  const [range, setRange] = useState<Range>("3M");
+  const [tf, setTf] = useState<Interval>("15m");
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [gainers, setGainers] = useState<Mover[]>([]);
   const [losers, setLosers] = useState<Mover[]>([]);
@@ -82,7 +87,6 @@ export function TerminalShell() {
   const [candles, setCandles] = useState<Candle[]>([]);
   const [head, setHead] = useState<{ price: number; prevClose: number } | null>(null);
   const [indices, setIndices] = useState<{ label: string; changePct: number; price: number }[]>([]);
-  const [watch, setWatch] = useState<string[]>([]);
   const handlesRef = useRef<Record<string, ChartHandle | null>>({});
   const cursorRef = useRef<CursorHandle>(null);
   const [messages, setMessages] = useState<HMsg[]>([]);
@@ -90,6 +94,7 @@ export function TerminalShell() {
   const [status, setStatus] = useState("");
   const [pendingTrade, setPendingTrade] = useState<ProposedTrade | null>(null);
   const [keyOpen, setKeyOpen] = useState(false);
+  const [swapOpen, setSwapOpen] = useState(false);
   // ONE big board pop-up that holds MULTIPLE panel tiles (the user + agent add into it). Dims the
   // background; tiled by default, draggable when the user flips the drag toggle.
   const [panelOpen, setPanelOpen] = useState(false);
@@ -113,7 +118,6 @@ export function TerminalShell() {
   const closePanel = () => setPanelOpen(false);
   const renderPanelBody = (id: string) => {
     switch (id) {
-      case "watch": return <WatchBody watch={watch} quotes={quotes} onPick={(s) => { setSelected(s); }} onRemove={toggleWatch} />;
       case "gainers": return <MoversBody rows={gainers} onPick={setSelected} up />;
       case "losers": return <MoversBody rows={losers} onPick={setSelected} />;
       case "news": return <NewsPanel symbol={selected} />;
@@ -178,7 +182,7 @@ export function TerminalShell() {
       try {
         if (a.tool === "selectSymbol") { setStatus(`opening ${a.symbol}…`); setSelected(a.symbol); await wait(900); }
         else if (a.tool === "openChart") { setStatus(`opening a ${a.symbol} chart…`); openChart(a.symbol); await wait(1000); }
-        else if (a.tool === "setTimeframe") { setStatus(`${a.range} view`); setRange(a.range); await wait(600); }
+        else if (a.tool === "setTimeframe") { setStatus(`${a.range} candles`); setTf(a.range as Interval); await wait(600); }
         else if (a.tool === "addIndicator") { setStatus(`adding ${a.name}`); chart?.addIndicator(a.name); await wait(500); }
         else if (a.tool === "clearIndicators") { chart?.removeIndicators(); await wait(300); }
         else if (a.tool === "clearDrawings") { chart?.clearOverlays(); await wait(250); }
@@ -256,7 +260,7 @@ export function TerminalShell() {
     setMessages((m) => [...m, { role: "assistant", content: "" }]); // the bubble we stream into
     const patchLast = (content: string) => setMessages((m) => { const c = [...m]; for (let i = c.length - 1; i >= 0; i--) { if (c[i].role === "assistant") { c[i] = { ...c[i], content }; break; } } return c; });
     try {
-      const reply = await runHorizon(t, { symbol: selected, range, candles, indicators: null, universe: STOCKS.map((s) => s.symbol), persona }, history, {
+      const reply = await runHorizon(t, { symbol: selected, range: tf, candles, indicators: null, universe: STOCKS.map((s) => s.symbol), persona }, history, {
         onStatus: (s) => setStatus(s),
         onText: (visible) => { if (visible) patchLast(visible); },
       });
@@ -267,9 +271,13 @@ export function TerminalShell() {
     } finally { setBusy(false); setStatus(""); cursorRef.current?.hide(); }
   };
 
-  // watchlist (localStorage)
-  useEffect(() => { try { setWatch(JSON.parse(localStorage.getItem("urizen.terminal.watch") || "[\"NVDA\",\"TSLA\",\"SPY\"]")); } catch { setWatch(["NVDA", "TSLA", "SPY"]); } }, []);
-  const toggleWatch = (s: string) => setWatch((w) => { const next = w.includes(s) ? w.filter((x) => x !== s) : [...w, s]; localStorage.setItem("urizen.terminal.watch", JSON.stringify(next)); return next; });
+  // price map for the portfolio (quotes cover movers; the active symbol adds its live price)
+  const prices = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const [k, v] of Object.entries(quotes)) m[k] = v.price;
+    if (head) m[selected] = head.price;
+    return m;
+  }, [quotes, head, selected]);
 
   // markets: real movers → quote map + gainers/losers
   useEffect(() => {
@@ -298,13 +306,15 @@ export function TerminalShell() {
   useEffect(() => {
     let on = true;
     // the active symbol's candles power the performance header + Horizon's grounding
-    fetch(`/api/quant/ohlc?symbol=${encodeURIComponent(selected)}&range=${range}`).then((r) => r.json()).then((d) => {
+    // grounding + header price for the ACTIVE symbol; polled so the header change stays live
+    const load = () => fetch(`/api/quant/ohlc?symbol=${encodeURIComponent(selected)}&interval=${tf}`).then((r) => r.json()).then((d) => {
       if (!on) return;
       setCandles(d?.candles || []);
-      setHead(d?.price != null ? { price: d.price, prevClose: d.prevClose } : null);
+      setHead(d?.price != null && d?.prevClose != null ? { price: d.price, prevClose: d.prevClose } : null);
     }).catch(() => {});
-    return () => { on = false; };
-  }, [selected, range]);
+    load(); const t = window.setInterval(load, 20000);
+    return () => { on = false; window.clearInterval(t); };
+  }, [selected, tf]);
 
   const changePct = head ? (head.price / head.prevClose - 1) * 100 : (quotes[selected]?.changePct ?? 0);
   const up = changePct >= 0;
@@ -327,19 +337,31 @@ export function TerminalShell() {
       <HorizonCursor ref={cursorRef} />
       <KeyModal open={keyOpen} onClose={() => setKeyOpen(false)} onChanged={() => {}} />
       {newAgentOpen && <NewAgentModal onClose={() => setNewAgentOpen(false)} onCreate={createAgent} />}
+      {swapOpen && (
+        <div className="fixed inset-0 z-[80] grid place-items-center bg-black/60 p-4 backdrop-blur-[2px]" onClick={() => setSwapOpen(false)}>
+          <div onClick={(e) => e.stopPropagation()} className="w-full max-w-md">
+            <div className="mb-2 flex items-center justify-between px-1">
+              <span className="font-mono text-[0.6rem] uppercase tracking-[0.18em] text-muted-foreground">Swap · Rialto best-route</span>
+              <button onClick={() => setSwapOpen(false)} className="font-mono text-sm text-muted-foreground transition-colors hover:text-foreground">✕</button>
+            </div>
+            <PhantomSwap defaultBuy={selected} />
+          </div>
+        </div>
+      )}
 
       {/* ── top bar ── */}
       <header className="relative z-40 flex h-[52px] shrink-0 items-center gap-4 border-b border-border bg-[#0a0a0b]/80 px-4 backdrop-blur-md">
-        <Link href="/" className="flex items-center gap-2">
-          <span className="grid h-7 w-7 place-items-center rounded-[5px] bg-signal/15"><UrizenMark className="h-3.5 w-auto text-signal" /></span>
-          <span className="font-display text-[15px] font-bold tracking-tight">Terminal</span>
+        <Link href="/" className="flex items-center gap-2.5">
+          <span className="grid h-9 w-9 place-items-center rounded-md bg-signal/15"><UrizenMark className="h-5 w-auto text-signal" /></span>
+          <span className="font-display text-[17px] font-bold tracking-tight">Terminal</span>
           <span className="hidden rounded-full border border-white/15 px-2 py-0.5 font-mono text-[0.58rem] uppercase tracking-[0.18em] text-muted-foreground sm:inline">URIZEN</span>
         </Link>
         <div className="relative hidden max-w-md flex-1 items-center sm:flex">
           <SymbolSearch onPick={setSelected} quotes={quotes} />
         </div>
-        <div className="ml-auto flex items-center gap-4">
+        <div className="ml-auto flex items-center gap-3">
           <MarketClock />
+          <button onClick={() => setSwapOpen(true)} className="rounded-md border border-signal/50 bg-signal/10 px-3.5 py-1.5 font-mono text-[0.72rem] font-medium uppercase tracking-[0.12em] text-signal transition-colors hover:bg-signal/20">Swap</button>
           <ConnectWalletButton />
         </div>
       </header>
@@ -351,8 +373,8 @@ export function TerminalShell() {
 
       {/* ── body: three rails ── */}
       <div className="relative z-10 grid min-h-0 flex-1 gap-2 p-2" style={{ gridTemplateColumns: "minmax(215px,245px) minmax(0,1fr) minmax(400px,460px)" }}>
-        {/* LEFT: markets + watchlist */}
-        <div className="grid min-h-0 grid-rows-[1.6fr_1fr] gap-2">
+        {/* LEFT: market tickers + your portfolio */}
+        <div className="grid min-h-0 grid-rows-[1.5fr_1fr] gap-2">
           <Pane n={1} title="Markets" right={<span className="font-mono text-[0.6rem] text-muted-foreground">{session || "24/7"}</span>}>
             <table className="w-full border-collapse text-[0.78rem]">
               <tbody>
@@ -361,8 +383,7 @@ export function TerminalShell() {
                   return (
                     <tr key={s.symbol} onClick={() => setSelected(s.symbol)}
                       className={`group cursor-pointer border-b border-border/40 transition-colors ${on ? "bg-signal/10" : "hover:bg-white/[0.03]"}`}>
-                      <td className="py-1.5 pl-3 pr-1"><button onClick={(e) => { e.stopPropagation(); toggleWatch(s.symbol); }} className={watch.includes(s.symbol) ? "text-signal" : "text-muted-foreground/40 hover:text-muted-foreground"}>★</button></td>
-                      <td className="py-1.5 pr-2"><div className="flex items-center gap-2"><Logo s={s.symbol} /><span className={`font-mono ${on ? "text-signal" : "text-foreground"}`}>{s.symbol}</span><button onClick={(e) => { e.stopPropagation(); openChart(s.symbol); }} title="open as a new chart" className="font-mono text-[0.72rem] leading-none text-muted-foreground/40 opacity-0 transition-opacity hover:text-signal group-hover:opacity-100">＋</button></div></td>
+                      <td className="py-1.5 pl-3 pr-2"><div className="flex items-center gap-2"><Logo s={s.symbol} /><span className={`font-mono ${on ? "text-signal" : "text-foreground"}`}>{s.symbol}</span><button onClick={(e) => { e.stopPropagation(); openChart(s.symbol); }} title="open as a new chart" className="font-mono text-[0.72rem] leading-none text-muted-foreground/40 opacity-0 transition-opacity hover:text-signal group-hover:opacity-100">＋</button></div></td>
                       <td className="py-1.5 pr-2 text-right font-mono tabular-nums text-foreground/90">{s.q ? fmt(s.q.price) : "—"}</td>
                       <td className={`py-1.5 pr-3 text-right font-mono tabular-nums ${s.q ? (s.q.changePct >= 0 ? "text-signal" : "text-[#ff5a5a]") : "text-muted-foreground/40"}`}>{s.q ? pct(s.q.changePct) : "—"}</td>
                     </tr>
@@ -371,26 +392,13 @@ export function TerminalShell() {
               </tbody>
             </table>
           </Pane>
-          <Pane n={2} title="Watchlist">
-            {watch.length === 0 ? <Empty>★ a market to pin it</Empty> : (
-              <table className="w-full border-collapse text-[0.78rem]">
-                <tbody>
-                  {watch.map((sym) => { const q = quotes[sym]; return (
-                    <tr key={sym} onClick={() => setSelected(sym)} className="cursor-pointer border-b border-border/40 hover:bg-white/[0.03]">
-                      <td className="py-1.5 pl-3 pr-2"><div className="flex items-center gap-2"><Logo s={sym} size={16} /><span className="font-mono">{sym}</span></div></td>
-                      <td className="py-1.5 pr-2 text-right font-mono tabular-nums text-foreground/90">{q ? fmt(q.price) : "—"}</td>
-                      <td className={`py-1.5 pr-2 text-right font-mono tabular-nums ${q ? (q.changePct >= 0 ? "text-signal" : "text-[#ff5a5a]") : "text-muted-foreground/40"}`}>{q ? pct(q.changePct) : "—"}</td>
-                      <td className="py-1.5 pr-3 text-right"><button onClick={(e) => { e.stopPropagation(); toggleWatch(sym); }} className="text-muted-foreground/40 hover:text-[#ff5a5a]">×</button></td>
-                    </tr>
-                  ); })}
-                </tbody>
-              </table>
-            )}
+          <Pane n={2} title="Portfolio" right={<button onClick={() => setSwapOpen(true)} className="font-mono text-[0.56rem] uppercase tracking-widest text-signal transition-colors hover:text-foreground">swap ↗</button>}>
+            <Portfolio prices={prices} onPick={setSelected} />
           </Pane>
         </div>
 
-        {/* CENTER: one big, vanilla chart. Its 44px header carries the instrument, price and tools —
-            no separate performance pane. Secondary panels open in a single unified dock (below). */}
+        {/* CENTER: the chart (its 44px header carries instrument, price, tools) + a news strip below */}
+        <div className="grid min-h-0 grid-rows-[1fr_170px] gap-2">
         <section className="flex min-h-0 flex-col overflow-hidden border border-border bg-[#0b0b0d]/62 backdrop-blur-md">
           <header className="flex h-11 shrink-0 items-center gap-3 border-b border-border pl-3 pr-2">
             <div className="flex min-w-0 items-center gap-2.5">
@@ -407,7 +415,7 @@ export function TerminalShell() {
             {session && <span className="hidden shrink-0 rounded-full border border-signal/25 bg-signal/10 px-2 py-0.5 font-mono text-[0.54rem] uppercase tracking-widest text-signal xl:inline">{session}</span>}
             <div className="ml-auto flex shrink-0 items-center gap-1.5">
               <div className="flex items-center rounded-md border border-border p-0.5">
-                {RANGES.map((r) => <button key={r} onClick={() => setRange(r)} className={`rounded px-1.5 py-0.5 font-mono text-[0.6rem] uppercase transition-colors ${range === r ? "bg-signal/15 text-signal" : "text-muted-foreground hover:text-foreground"}`}>{r}</button>)}
+                {INTERVALS.map((r) => <button key={r} onClick={() => setTf(r)} className={`rounded px-1.5 py-0.5 font-mono text-[0.6rem] uppercase transition-colors ${tf === r ? "bg-signal/15 text-signal" : "text-muted-foreground hover:text-foreground"}`}>{r}</button>)}
               </div>
               {/* draw on the chart yourself — pick a tool, then click the chart to place it */}
               <DrawMenu onDraw={startDraw} />
@@ -421,9 +429,13 @@ export function TerminalShell() {
             </div>
           </header>
           <div className="min-h-0 flex-1">
-            <ChartWorkspace charts={charts} activeId={activeId} range={range} onFocus={setActiveId} onClose={closeChart} onHandle={(id, h) => { handlesRef.current[id] = h; }} />
+            <ChartWorkspace charts={charts} activeId={activeId} interval={tf} onFocus={setActiveId} onClose={closeChart} onHandle={(id, h) => { handlesRef.current[id] = h; }} />
           </div>
         </section>
+        <Pane n={5} title={`News · ${selected}`} right={<button onClick={() => openPanel("news")} className="font-mono text-[0.56rem] uppercase tracking-widest text-muted-foreground transition-colors hover:text-signal">expand ↗</button>}>
+          <NewsPanel symbol={selected} />
+        </Pane>
+        </div>
 
         {/* RIGHT: the terminal agent */}
         <HorizonRail selected={selected} messages={messages} busy={busy} status={status} onAsk={ask}
@@ -438,7 +450,7 @@ export function TerminalShell() {
       {/* ── bottom status bar ── */}
       <footer className="relative z-10 flex h-7 shrink-0 items-center gap-4 border-t border-border bg-[#0a0a0b]/90 px-4 font-mono text-[0.62rem] text-muted-foreground">
         <span className="flex items-center gap-1.5 text-signal"><span className="h-1.5 w-1.5 rounded-full bg-signal" />terminal</span>
-        <span className="hidden text-muted-foreground/50 sm:inline">{selected} · {range} · {charts.length} chart{charts.length === 1 ? "" : "s"}{panels.length ? ` · ${panels.length} panel${panels.length === 1 ? "" : "s"}` : ""}</span>
+        <span className="hidden text-muted-foreground/50 sm:inline">{selected} · {tf} · {charts.length} chart{charts.length === 1 ? "" : "s"}{panels.length ? ` · ${panels.length} panel${panels.length === 1 ? "" : "s"}` : ""}</span>
         <span className="ml-auto hidden gap-4 md:flex">
           <span><kbd className="text-foreground">/</kbd> search</span>
           <span><kbd className="text-foreground">+</kbd> add panel</span>
@@ -597,25 +609,6 @@ function AddChartButton({ disabled, onPick, quotes, openSymbols }: { disabled?: 
   );
 }
 
-// the watchlist as a full panel view — pick a symbol or unpin it
-function WatchBody({ watch, quotes, onPick, onRemove }: { watch: string[]; quotes: Record<string, { price: number; changePct: number }>; onPick: (s: string) => void; onRemove: (s: string) => void }) {
-  if (!watch.length) return <Empty>★ a market to pin it</Empty>;
-  return (
-    <table className="w-full border-collapse text-[0.8rem]">
-      <tbody>
-        {watch.map((sym) => { const q = quotes[sym]; return (
-          <tr key={sym} onClick={() => onPick(sym)} className="cursor-pointer border-b border-border/40 hover:bg-white/[0.03]">
-            <td className="py-2 pl-4 pr-2"><div className="flex items-center gap-2.5"><Logo s={sym} size={18} /><span className="font-mono">{sym}</span></div></td>
-            <td className="py-2 pr-3 text-right font-mono tabular-nums text-foreground/90">{q ? fmt(q.price) : "—"}</td>
-            <td className={`py-2 pr-3 text-right font-mono tabular-nums ${q ? (q.changePct >= 0 ? "text-signal" : "text-[#ff5a5a]") : "text-muted-foreground/40"}`}>{q ? pct(q.changePct) : "—"}</td>
-            <td className="py-2 pr-4 text-right"><button onClick={(e) => { e.stopPropagation(); onRemove(sym); }} className="text-muted-foreground/40 hover:text-[#ff5a5a]">×</button></td>
-          </tr>
-        ); })}
-      </tbody>
-    </table>
-  );
-}
-
 // ── wallet gate — the agent is gated to your wallet; connect first, then add a key ──
 function WalletGate() {
   return (
@@ -750,7 +743,7 @@ function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrade, ta
         {messages.length === 0 && (
           <div className="space-y-4">
             <div className="flex items-start gap-2.5">
-              <span className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full border border-signal/40 bg-signal/10"><UrizenMark className="h-3.5 w-auto text-signal" /></span>
+              <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-full border border-signal/40 bg-signal/10"><UrizenMark className="h-4 w-auto text-signal" /></span>
               <div className="rounded-xl rounded-tl-sm border border-border bg-white/[0.03] p-3 text-[0.82rem] leading-relaxed text-foreground/90">
                 {activeAgent
                   ? <>i&apos;m <span className="text-signal">{activeAgent.name}</span> — your {activeAgent.mandate.toLowerCase()} desk. tell me what to look at and i&apos;ll read the tape, draw on the chart, pull news, open panels, and set up trades for you to sign.</>
@@ -782,7 +775,7 @@ function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrade, ta
           );
           return (
             <div key={i} className="flex items-start gap-2.5">
-              <span className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full border border-signal/40 bg-signal/10"><UrizenMark className="h-3.5 w-auto text-signal" /></span>
+              <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-full border border-signal/40 bg-signal/10"><UrizenMark className="h-4 w-auto text-signal" /></span>
               <div className="msg-in max-w-[88%] space-y-1.5 rounded-xl rounded-tl-sm border border-border bg-white/[0.03] px-3 py-2 text-[0.82rem] leading-relaxed text-foreground/90">
                 {m.content && <div>{renderMd(m.content)}{streaming && !status && <span className="ml-0.5 inline-block h-3.5 w-[2px] translate-y-0.5 animate-pulse bg-signal align-middle" />}</div>}
                 {streaming && status ? <Thinking status={status} /> : null}
