@@ -50,15 +50,15 @@ function TokenPicker({ exclude, onPick, onClose }: { exclude?: string; onPick: (
   );
 }
 
-export function PhantomSwap({ defaultBuy = "NVDA", className = "" }: { defaultBuy?: string; className?: string }) {
+export function PhantomSwap({ defaultSell = "USDG", defaultBuy = "NVDA", defaultAmount = "100", className = "" }: { defaultSell?: string; defaultBuy?: string; defaultAmount?: string; className?: string }) {
   const { address, isConnected } = useAccount();
   const chainId = useChainId();
   const { openConnectModal } = useConnectModal();
   const { switchChainAsync } = useSwitchChain();
 
-  const [pay, setPay] = useState("USDG");
+  const [pay, setPay] = useState(defaultSell);
   const [recv, setRecv] = useState(defaultBuy);
-  const [amount, setAmount] = useState("100");
+  const [amount, setAmount] = useState(defaultAmount);
   const [picker, setPicker] = useState<null | "pay" | "recv">(null);
   const [quote, setQuote] = useState<Quote | null>(null);
   const [loading, setLoading] = useState(false);
@@ -95,7 +95,7 @@ export function PhantomSwap({ defaultBuy = "NVDA", className = "" }: { defaultBu
     if (deb.current) clearTimeout(deb.current);
     deb.current = setTimeout(async () => {
       setLoading(true);
-      try { setQuote(await getQuote({ sellSym: pay, buySym: recv, sellAmount: amount, taker: address, slippageBps: 100 })); }
+      try { setQuote(await getQuote({ sellSym: pay, buySym: recv, sellAmount: amount, taker: address, slippageBps: 200 })); }
       catch (e) { const er = e as Error & { notConfigured?: boolean }; setNotConfigured(!!er.notConfigured); setErr(er.message); }
       finally { setLoading(false); }
     }, 450);
@@ -133,7 +133,7 @@ export function PhantomSwap({ defaultBuy = "NVDA", className = "" }: { defaultBu
     <div className={`relative w-full max-w-[420px] rounded-3xl border border-white/10 bg-[#141416] p-4 shadow-2xl ${className}`}>
       <div className="mb-3 flex items-center justify-between px-1">
         <span className="text-[17px] font-semibold tracking-tight">Swap</span>
-        <span className="rounded-full bg-white/[0.05] px-2.5 py-1 text-[11px] font-medium text-muted-foreground">1% slippage</span>
+        <span className="rounded-full bg-white/[0.05] px-2.5 py-1 text-[11px] font-medium text-muted-foreground">2% slippage</span>
       </div>
 
       {/* you pay */}

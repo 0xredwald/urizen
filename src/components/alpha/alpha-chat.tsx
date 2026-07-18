@@ -59,6 +59,7 @@ export function AlphaChat() {
   const [streamingId, setStreamingId] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
   const [showSwap, setShowSwap] = useState(true); // swap dock visible by default
+  const [tradeLink, setTradeLink] = useState<{ sell: string; buy: string; amount: string } | null>(null); // a proposed trade from the bot (?sell=…)
   const [onboarded, setOnboarded] = useState(true); // assume done until we read storage (avoids flash)
   const [hydrated, setHydrated] = useState(false);
   const [enabled, setEnabled] = useState<string[]>(ALL_SKILL_IDS); // which skills the agent may call
@@ -134,6 +135,15 @@ export function AlphaChat() {
       body: JSON.stringify({ tg: Number(tg), address: addr, sig }),
     }).catch(() => {});
   }, [isConnected, addr]);
+
+  // opened from a bot "Open & sign" button (?sell=&buy=&amount=): surface the exact proposed trade as
+  // a focused, pre-filled overlay — ready to sign the moment the wallet reconnects — instead of a bare page.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const q = new URLSearchParams(window.location.search);
+    const sell = q.get("sell");
+    if (sell) setTradeLink({ sell, buy: q.get("buy") || "NVDA", amount: q.get("amount") || "100" });
+  }, []);
 
   // pin to bottom only when the user is already near it, and instantly (no smooth animation
   // re-firing on every streamed token — that's what made charts "jump around")
@@ -426,6 +436,21 @@ export function AlphaChat() {
             <PhantomSwap defaultBuy={agent.instruments[0] ?? "NVDA"} />
           </div>
         </aside>
+      )}
+
+      {/* proposed trade from the bot — a focused, pre-filled sign card on ANY screen (the dock above is
+          desktop-only, so mobile users from Telegram would otherwise land on a bare page). Ready to sign
+          the instant the wallet reconnects. */}
+      {tradeLink && (
+        <div className="fixed inset-0 z-[90] grid place-items-center bg-black/70 p-4 backdrop-blur-sm" onClick={() => setTradeLink(null)}>
+          <div onClick={(e) => e.stopPropagation()} className="w-full max-w-md">
+            <div className="mb-2 flex items-center justify-between px-1">
+              <span className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground"><span className="text-signal">◈</span> Sign your trade</span>
+              <button onClick={() => setTradeLink(null)} className="text-sm text-muted-foreground transition-colors hover:text-foreground" aria-label="close">✕</button>
+            </div>
+            <PhantomSwap defaultSell={tradeLink.sell} defaultBuy={tradeLink.buy} defaultAmount={tradeLink.amount} />
+          </div>
+        </div>
       )}
 
       {showSkills && <SkillsModal enabled={enabled} onToggle={toggleSkill} onSet={setEnabled} onClose={() => setShowSkills(false)} />}
