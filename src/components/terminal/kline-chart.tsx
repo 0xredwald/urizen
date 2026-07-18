@@ -17,6 +17,8 @@ export type ChartHandle = {
   removeIndicators: () => void;
   removeLastIndicator: () => boolean;
   createOverlay: (name: string, points: OverlayPoint[], extra?: Record<string, unknown>) => void;
+  /** enter interactive draw mode — user clicks the chart to place the overlay's points. */
+  startDraw: (name: string) => void;
   drawHLine: (price: number) => void;
   clearOverlays: () => void;
   removeLastOverlay: () => boolean;
@@ -147,6 +149,11 @@ export const KlineChart = forwardRef<ChartHandle, { candles: Candle[]; symbol: s
       },
       createOverlay: (name, points, extra = {}) => {
         const id = chartRef.current?.createOverlay({ name, points, ...extra });
+        if (typeof id === "string") overlayIds.current.push(id);
+      },
+      startDraw: (name) => {
+        // no points → KLineChart enters interactive drawing (user clicks to place the points)
+        const id = chartRef.current?.createOverlay({ name });
         if (typeof id === "string") overlayIds.current.push(id);
       },
       drawHLine: (price) => {

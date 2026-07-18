@@ -90,9 +90,10 @@ export function TerminalShell() {
   const [status, setStatus] = useState("");
   const [pendingTrade, setPendingTrade] = useState<ProposedTrade | null>(null);
   const [keyOpen, setKeyOpen] = useState(false);
-  // ONE unified command panel (a big pop-up with a view selector), not scattered windows.
+  // ONE big board pop-up that holds MULTIPLE panel tiles (the user + agent add into it). Dims the
+  // background; tiled by default, draggable when the user flips the drag toggle.
   const [panelOpen, setPanelOpen] = useState(false);
-  const [panelView, setPanelView] = useState("news");
+  const [panels, setPanels] = useState<string[]>([]);
   // named agent personas (persisted in the browser, shared with Alpha via urizen.agents.v1)
   const [agents, setAgents] = useState<Agent[]>([]);
   const [agentId, setAgentId] = useState<string | null>(null);
@@ -105,9 +106,10 @@ export function TerminalShell() {
   const createAgent = (a: Agent) => { const all = saveAgent({ ...a, owner: address ?? undefined }); setAgents(all); selectAgent(a.id); setNewAgentOpen(false); };
   const persona = activeAgent ? { name: activeAgent.name, mandate: activeAgent.mandate, risk: activeAgent.risk, note: activeAgent.note } : null;
 
-  useEffect(() => { try { const s = localStorage.getItem("urizen.terminal.view"); if (s && ALL_PANELS.some((p) => p.id === s)) setPanelView(s); } catch { /* noop */ } }, []);
-  const selectView = (id: string) => { setPanelView(id); try { localStorage.setItem("urizen.terminal.view", id); } catch { /* noop */ } };
-  const openPanel = (id: string) => { if (ALL_PANELS.some((p) => p.id === id)) { selectView(id); setPanelOpen(true); } };
+  useEffect(() => { try { const s = localStorage.getItem("urizen.terminal.board"); if (s) { const ids = JSON.parse(s); if (Array.isArray(ids)) setPanels(ids.filter((id: string) => ALL_PANELS.some((p) => p.id === id))); } } catch { /* noop */ } }, []);
+  const persist = (next: string[]) => { try { localStorage.setItem("urizen.terminal.board", JSON.stringify(next)); } catch { /* noop */ } return next; };
+  const openPanel = (id: string) => { if (!ALL_PANELS.some((p) => p.id === id)) return; setPanels((prev) => persist(prev.includes(id) ? prev : [...prev, id])); setPanelOpen(true); };
+  const closeTile = (id: string) => setPanels((prev) => persist(prev.filter((p) => p !== id)));
   const closePanel = () => setPanelOpen(false);
   const renderPanelBody = (id: string) => {
     switch (id) {
@@ -137,7 +139,6 @@ export function TerminalShell() {
     setCharts((cs) => [...cs, { id, symbol: sym }]);
     setActiveId(id);
   };
-  const addNextChart = () => { const open = new Set(charts.map((c) => c.symbol)); openChart(STOCKS.find((s) => !open.has(s.symbol))?.symbol || "SPY"); };
   const closeChart = (id: string) => setCharts((cs) => {
     if (cs.length <= 1) return cs;
     const next = cs.filter((c) => c.id !== id);
@@ -150,6 +151,7 @@ export function TerminalShell() {
 
   const clearDrawings = () => handlesRef.current[activeId]?.clearOverlays();
   const clearIndicators = () => handlesRef.current[activeId]?.removeIndicators();
+  const startDraw = (name: string) => handlesRef.current[activeId]?.startDraw(name);
   // Delete / Backspace removes the last drawing (then the last indicator) off the active chart
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -200,7 +202,7 @@ export function TerminalShell() {
           chart?.createOverlay("simpleAnnotation", [{ timestamp: a.t * 1000, value: a.price }], { extendData: a.text });
           await wait(450);
         } else if (a.tool === "openPanel") { setStatus(`opening ${a.panel}`); openPanel(a.panel); await wait(500);
-        } else if (a.tool === "closePanel") { closePanel(); await wait(300);
+        } else if (a.tool === "closePanel") { closeTile(a.panel); await wait(300);
         } else if (a.tool === "checkNews") {
           const sym = a.symbol || selected; setStatus(`checking ${sym} news…`);
           const news = await fetch(`/api/quant/news?symbol=${encodeURIComponent(sym)}`).then((r) => r.json()).catch(() => null);
@@ -358,9 +360,9 @@ export function TerminalShell() {
                   const on = s.symbol === selected;
                   return (
                     <tr key={s.symbol} onClick={() => setSelected(s.symbol)}
-                      className={`cursor-pointer border-b border-border/40 transition-colors ${on ? "bg-signal/10" : "hover:bg-white/[0.03]"}`}>
+                      className={`group cursor-pointer border-b border-border/40 transition-colors ${on ? "bg-signal/10" : "hover:bg-white/[0.03]"}`}>
                       <td className="py-1.5 pl-3 pr-1"><button onClick={(e) => { e.stopPropagation(); toggleWatch(s.symbol); }} className={watch.includes(s.symbol) ? "text-signal" : "text-muted-foreground/40 hover:text-muted-foreground"}>★</button></td>
-                      <td className="py-1.5 pr-2"><div className="flex items-center gap-2"><Logo s={s.symbol} /><span className={`font-mono ${on ? "text-signal" : "text-foreground"}`}>{s.symbol}</span></div></td>
+                      <td className="py-1.5 pr-2"><div className="flex items-center gap-2"><Logo s={s.symbol} /><span className={`font-mono ${on ? "text-signal" : "text-foreground"}`}>{s.symbol}</span><button onClick={(e) => { e.stopPropagation(); openChart(s.symbol); }} title="open as a new chart" className="font-mono text-[0.72rem] leading-none text-muted-foreground/40 opacity-0 transition-opacity hover:text-signal group-hover:opacity-100">＋</button></div></td>
                       <td className="py-1.5 pr-2 text-right font-mono tabular-nums text-foreground/90">{s.q ? fmt(s.q.price) : "—"}</td>
                       <td className={`py-1.5 pr-3 text-right font-mono tabular-nums ${s.q ? (s.q.changePct >= 0 ? "text-signal" : "text-[#ff5a5a]") : "text-muted-foreground/40"}`}>{s.q ? pct(s.q.changePct) : "—"}</td>
                     </tr>
@@ -407,13 +409,15 @@ export function TerminalShell() {
               <div className="flex items-center rounded-md border border-border p-0.5">
                 {RANGES.map((r) => <button key={r} onClick={() => setRange(r)} className={`rounded px-1.5 py-0.5 font-mono text-[0.6rem] uppercase transition-colors ${range === r ? "bg-signal/15 text-signal" : "text-muted-foreground hover:text-foreground"}`}>{r}</button>)}
               </div>
+              {/* draw on the chart yourself — pick a tool, then click the chart to place it */}
+              <DrawMenu onDraw={startDraw} />
               {/* erase what's on the chart — drawings, then indicators (Del key also removes the last one) */}
               <div className="hidden items-center rounded-md border border-border p-0.5 md:flex">
-                <button onClick={clearDrawings} title="clear drawings (Del)" className="grid h-5 w-6 place-items-center rounded font-mono text-[0.7rem] leading-none text-muted-foreground transition-colors hover:bg-white/5 hover:text-[#ff5a5a]">✎</button>
+                <button onClick={clearDrawings} title="clear drawings (Del)" className="grid h-5 w-6 place-items-center rounded font-mono text-[0.72rem] leading-none text-muted-foreground transition-colors hover:bg-white/5 hover:text-[#ff5a5a]">⌫</button>
                 <button onClick={clearIndicators} title="clear indicators" className="grid h-5 w-6 place-items-center rounded font-mono text-[0.72rem] leading-none text-muted-foreground transition-colors hover:bg-white/5 hover:text-[#ff5a5a]">∿</button>
               </div>
-              <button onClick={addNextChart} disabled={charts.length >= 4} title="add a chart" className="grid h-6 w-6 place-items-center rounded-md border border-border font-mono text-[0.8rem] leading-none text-muted-foreground transition-colors hover:border-signal/40 hover:text-signal disabled:opacity-30">＋</button>
-              <button onClick={() => setPanelOpen(true)} title="panels (news, ratings, watch…)" className={`flex items-center gap-1 rounded-md border px-2 py-1 font-mono text-[0.6rem] uppercase tracking-wide transition-colors ${panelOpen ? "border-signal/40 text-signal" : "border-border text-muted-foreground hover:text-foreground"}`}>▦ panels</button>
+              <AddChartButton disabled={charts.length >= 4} onPick={openChart} quotes={quotes} openSymbols={charts.map((c) => c.symbol)} />
+              <button onClick={() => setPanelOpen(true)} title="panels (news, ratings, watch…)" className={`flex items-center gap-1 rounded-md border px-2 py-1 font-mono text-[0.6rem] uppercase tracking-wide transition-colors ${panelOpen || panels.length ? "border-signal/40 text-signal" : "border-border text-muted-foreground hover:text-foreground"}`}>▦ panels{panels.length ? <span className="text-signal">· {panels.length}</span> : null}</button>
             </div>
           </header>
           <div className="min-h-0 flex-1">
@@ -427,14 +431,14 @@ export function TerminalShell() {
           agents={agents} activeAgent={activeAgent} onSelectAgent={selectAgent} onNewAgent={() => setNewAgentOpen(true)} />
       </div>
 
-      {/* ONE big command panel — a dimmed-backdrop pop-up with a view selector on the left. The user
-          (and the agent) pick a view (news, ratings, watch, heatmap…); optionally draggable. */}
-      <CommandPanel open={panelOpen} view={panelView} onView={selectView} onClose={closePanel} render={renderPanelBody} />
+      {/* ONE big board — a dimmed-backdrop pop-up that holds MULTIPLE panel tiles. Add as many as you
+          like (news + ratings + watch…), tiled by default, draggable when you flip the toggle. */}
+      <CommandBoard open={panelOpen} panels={panels} onAdd={openPanel} onCloseTile={closeTile} onClose={closePanel} render={renderPanelBody} />
 
       {/* ── bottom status bar ── */}
       <footer className="relative z-10 flex h-7 shrink-0 items-center gap-4 border-t border-border bg-[#0a0a0b]/90 px-4 font-mono text-[0.62rem] text-muted-foreground">
         <span className="flex items-center gap-1.5 text-signal"><span className="h-1.5 w-1.5 rounded-full bg-signal" />terminal</span>
-        <span className="hidden text-muted-foreground/50 sm:inline">{selected} · {range} · {charts.length} chart{charts.length === 1 ? "" : "s"}{panelOpen ? ` · ${ALL_PANELS.find((p) => p.id === panelView)?.title ?? "panel"}` : ""}</span>
+        <span className="hidden text-muted-foreground/50 sm:inline">{selected} · {range} · {charts.length} chart{charts.length === 1 ? "" : "s"}{panels.length ? ` · ${panels.length} panel${panels.length === 1 ? "" : "s"}` : ""}</span>
         <span className="ml-auto hidden gap-4 md:flex">
           <span><kbd className="text-foreground">/</kbd> search</span>
           <span><kbd className="text-foreground">+</kbd> add panel</span>
@@ -449,49 +453,146 @@ function Empty({ children }: { children: React.ReactNode }) {
   return <div className="grid h-full place-items-center font-mono text-[0.7rem] uppercase tracking-widest text-muted-foreground/50">{children}</div>;
 }
 
-// ── the ONE big command panel — a dimmed-backdrop pop-up with a left view selector. The user (and
-// the agent) pick a view; everything behind dims. Optionally draggable + resizable + maximizable. ──
-function CommandPanel({ open, view, onView, onClose, render }: { open: boolean; view: string; onView: (id: string) => void; onClose: () => void; render: (id: string) => React.ReactNode }) {
-  const [off, setOff] = useState({ x: 0, y: 0 });
+// ── the ONE big board — a dimmed-backdrop pop-up holding MULTIPLE panel tiles. Add as many as you
+// want (news + ratings + watch…); tiled by default, draggable when you flip the lock. Agent adds too. ──
+function CommandBoard({ open, panels, onAdd, onCloseTile, onClose, render }: { open: boolean; panels: string[]; onAdd: (id: string) => void; onCloseTile: (id: string) => void; onClose: () => void; render: (id: string) => React.ReactNode }) {
+  const [drag, setDrag] = useState(false);
   const [max, setMax] = useState(false);
-  const drag = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
+  const [addMenu, setAddMenu] = useState(false);
+  const [pos, setPos] = useState<Record<string, { x: number; y: number }>>({});
+  const addRef = useRef<HTMLDivElement>(null);
   useEffect(() => { if (!open) return; const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); }; window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey); }, [open, onClose]);
+  useEffect(() => { const h = (e: MouseEvent) => { if (addRef.current && !addRef.current.contains(e.target as Node)) setAddMenu(false); }; document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h); }, []);
   if (!open) return null;
-  const onDown = (e: React.PointerEvent) => { if (max) return; drag.current = { sx: e.clientX, sy: e.clientY, ox: off.x, oy: off.y }; (e.currentTarget as Element).setPointerCapture(e.pointerId); };
-  const onMove = (e: React.PointerEvent) => { if (!drag.current) return; setOff({ x: drag.current.ox + (e.clientX - drag.current.sx), y: drag.current.oy + (e.clientY - drag.current.sy) }); };
-  const onUp = (e: React.PointerEvent) => { drag.current = null; try { (e.currentTarget as Element).releasePointerCapture(e.pointerId); } catch { /* */ } };
-  const title = ALL_PANELS.find((p) => p.id === view)?.title ?? view;
   return (
-    <div className="fixed inset-0 z-[80] grid place-items-center bg-black/55 backdrop-blur-[2px]" onPointerDown={onClose}>
+    <div className="fixed inset-0 z-[80] grid place-items-center bg-black/60 backdrop-blur-[2px] p-4" onPointerDown={onClose}>
       <div onPointerDown={(e) => e.stopPropagation()}
-        style={max
-          ? { width: "94vw", height: "86vh" }
-          : { width: "min(1040px, 92vw)", height: "min(680px, 82vh)", transform: `translate(${off.x}px, ${off.y}px)` }}
-        className="flex overflow-hidden rounded-2xl border border-signal/25 bg-[#0b0b0d]/95 shadow-2xl backdrop-blur-md">
-        {/* left: view selector */}
-        <aside className="flex w-44 shrink-0 flex-col border-r border-border bg-white/[0.02]">
-          <div className="flex h-10 items-center px-3.5 font-mono text-[0.6rem] uppercase tracking-[0.16em] text-muted-foreground/60">Panels</div>
-          <div className="min-h-0 flex-1 overflow-auto px-1.5 pb-2">
-            {ALL_PANELS.map((p) => { const on = p.id === view; return (
-              <button key={p.id} onClick={() => onView(p.id)} className={`mb-0.5 flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-mono text-[0.72rem] transition-colors ${on ? "bg-signal/12 text-signal" : "text-muted-foreground hover:bg-white/[0.04] hover:text-foreground"}`}>
-                <span className={`h-1 w-1 rounded-full ${on ? "bg-signal" : "bg-transparent"}`} />{p.title}
+        style={max ? { width: "97vw", height: "92vh" } : { width: "min(1180px, 95vw)", height: "min(760px, 88vh)" }}
+        className="flex flex-col overflow-hidden rounded-2xl border border-signal/25 bg-[#0a0a0c] shadow-2xl">
+        <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
+          <span className="font-mono text-[0.62rem] uppercase tracking-[0.18em] text-muted-foreground">Board</span>
+          <span className="font-mono text-[0.58rem] text-muted-foreground/40">· {panels.length}</span>
+          <div ref={addRef} className="relative ml-1">
+            <button onClick={() => setAddMenu((v) => !v)} className={`flex items-center gap-1 rounded-md border px-2.5 py-1 font-mono text-[0.6rem] uppercase tracking-wide transition-colors ${addMenu ? "border-signal/40 text-signal" : "border-border text-muted-foreground hover:text-foreground"}`}>＋ add panel</button>
+            {addMenu && (
+              <div className="absolute left-0 top-full z-[90] mt-1.5 w-56 overflow-hidden rounded-xl border border-border bg-[#0d0d10] p-1 shadow-2xl">
+                {ALL_PANELS.map((p) => { const on = panels.includes(p.id); return (
+                  <button key={p.id} onClick={() => { onAdd(p.id); setAddMenu(false); }} className={`flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-[0.76rem] transition-colors ${on ? "text-signal" : "text-muted-foreground hover:bg-white/[0.04] hover:text-foreground"}`}>
+                    {p.title}{on && <span className="font-mono text-[0.5rem] uppercase tracking-widest text-signal/70">open</span>}
+                  </button>
+                ); })}
+              </div>
+            )}
+          </div>
+          <div className="ml-auto flex items-center gap-1">
+            <button onClick={() => setDrag((d) => !d)} title={drag ? "lock the layout" : "unlock to drag tiles"} className={`rounded-md border px-2 py-1 font-mono text-[0.54rem] uppercase tracking-widest transition-colors ${drag ? "border-signal/50 bg-signal/10 text-signal" : "border-border text-muted-foreground hover:text-foreground"}`}>{drag ? "◈ drag on" : "⇲ drag"}</button>
+            <button onClick={() => setMax((m) => !m)} title={max ? "restore" : "maximize"} className="grid h-6 w-6 place-items-center rounded-md text-[0.8rem] text-muted-foreground/60 transition-colors hover:bg-white/5 hover:text-signal">{max ? "❐" : "⤢"}</button>
+            <button onClick={onClose} title="close (Esc)" className="grid h-6 w-6 place-items-center rounded-md text-[0.95rem] leading-none text-muted-foreground/60 transition-colors hover:bg-[#ff5a5a]/15 hover:text-[#ff5a5a]">×</button>
+          </div>
+        </header>
+        {panels.length === 0 ? (
+          <div className="grid flex-1 place-items-center px-6 text-center">
+            <div className="max-w-xs space-y-2">
+              <div className="font-mono text-[0.66rem] uppercase tracking-widest text-muted-foreground/50">empty board</div>
+              <div className="text-[0.84rem] leading-relaxed text-muted-foreground">add panels with <span className="text-signal">＋ add panel</span> — news, ratings, your watchlist, heatmap… stack as many as you like. the agent can fill it too.</div>
+            </div>
+          </div>
+        ) : drag ? (
+          <div className="relative min-h-0 flex-1 overflow-hidden bg-[#08080a]">
+            {panels.map((id, i) => (
+              <Tile key={id} id={id} title={ALL_PANELS.find((p) => p.id === id)?.title ?? id} draggable pos={pos[id] ?? { x: 16 + (i % 4) * 44, y: 16 + (i % 5) * 30 }} onPos={(p) => setPos((m) => ({ ...m, [id]: p }))} onClose={() => onCloseTile(id)}>{render(id)}</Tile>
+            ))}
+          </div>
+        ) : (
+          <div className="min-h-0 flex-1 overflow-auto bg-[#08080a] p-2.5">
+            <div className="grid gap-2.5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gridAutoRows: "300px" }}>
+              {panels.map((id) => (
+                <Tile key={id} id={id} title={ALL_PANELS.find((p) => p.id === id)?.title ?? id} onClose={() => onCloseTile(id)}>{render(id)}</Tile>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// a dark panel tile — a static grid child, or an absolutely-positioned draggable card in drag mode
+function Tile({ id, title, draggable, pos, onPos, onClose, children }: { id: string; title: string; draggable?: boolean; pos?: { x: number; y: number }; onPos?: (p: { x: number; y: number }) => void; onClose: () => void; children: React.ReactNode }) {
+  void id;
+  const drag = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
+  const onDown = (e: React.PointerEvent) => { if (!draggable || !pos) return; drag.current = { sx: e.clientX, sy: e.clientY, ox: pos.x, oy: pos.y }; (e.currentTarget as Element).setPointerCapture(e.pointerId); };
+  const onMove = (e: React.PointerEvent) => { if (!drag.current) return; onPos?.({ x: Math.max(0, drag.current.ox + (e.clientX - drag.current.sx)), y: Math.max(0, drag.current.oy + (e.clientY - drag.current.sy)) }); };
+  const onUp = (e: React.PointerEvent) => { drag.current = null; try { (e.currentTarget as Element).releasePointerCapture(e.pointerId); } catch { /* */ } };
+  return (
+    <section
+      style={draggable && pos ? { position: "absolute", left: pos.x, top: pos.y, width: 340, height: 300, minWidth: 240, minHeight: 180, resize: "both" } : undefined}
+      className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-[#0b0b0d] shadow-lg">
+      <header onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp}
+        className={`flex h-8 shrink-0 items-center justify-between border-b border-border px-3 ${draggable ? "cursor-grab active:cursor-grabbing" : ""}`}>
+        <span className="select-none font-mono text-[0.64rem] uppercase tracking-[0.16em] text-muted-foreground">{draggable ? "⠿ " : ""}{title}</span>
+        <button onPointerDown={(e) => e.stopPropagation()} onClick={onClose} title="close" className="grid h-5 w-5 place-items-center rounded font-mono text-[0.9rem] leading-none text-muted-foreground/50 transition-colors hover:bg-[#ff5a5a]/15 hover:text-[#ff5a5a]">×</button>
+      </header>
+      <div className="min-h-0 flex-1 overflow-auto bg-[#0b0b0d]">{children}</div>
+    </section>
+  );
+}
+
+// draw tools — pick one, then click the chart to place it (KLineChart interactive overlays)
+const DRAW_TOOLS: { name: string; label: string; glyph: string }[] = [
+  { name: "segment", label: "Trend line", glyph: "╱" },
+  { name: "rayLine", label: "Ray", glyph: "↗" },
+  { name: "horizontalStraightLine", label: "Horizontal", glyph: "─" },
+  { name: "verticalStraightLine", label: "Vertical", glyph: "│" },
+  { name: "priceLine", label: "Price level", glyph: "⊢" },
+  { name: "rect", label: "Rectangle", glyph: "▭" },
+  { name: "fibonacciLine", label: "Fibonacci", glyph: "≣" },
+];
+function DrawMenu({ onDraw }: { onDraw: (name: string) => void }) {
+  const [show, setShow] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => { const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setShow(false); }; document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h); }, []);
+  return (
+    <div ref={ref} className="relative">
+      <button onClick={() => setShow((s) => !s)} title="draw on the chart" className={`grid h-6 w-7 place-items-center rounded-md border font-mono text-[0.82rem] leading-none transition-colors ${show ? "border-signal/40 text-signal" : "border-border text-muted-foreground hover:text-signal"}`}>✎</button>
+      {show && (
+        <div className="absolute right-0 top-full z-[60] mt-1.5 w-44 overflow-hidden rounded-xl border border-border bg-[#0d0d10] p-1 shadow-2xl">
+          <div className="px-2.5 py-1 font-mono text-[0.5rem] uppercase tracking-widest text-muted-foreground/50">draw · then click chart</div>
+          {DRAW_TOOLS.map((t) => (
+            <button key={t.name} onClick={() => { onDraw(t.name); setShow(false); }} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[0.74rem] text-muted-foreground transition-colors hover:bg-white/[0.04] hover:text-foreground">
+              <span className="w-4 text-center text-signal">{t.glyph}</span>{t.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// "+" chart → search & pick which stock to open as a new chart
+function AddChartButton({ disabled, onPick, quotes, openSymbols }: { disabled?: boolean; onPick: (s: string) => void; quotes: Record<string, { price: number; changePct: number }>; openSymbols: string[] }) {
+  const [show, setShow] = useState(false);
+  const [q, setQ] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => { const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) { setShow(false); setQ(""); } }; document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h); }, []);
+  const results = useMemo(() => { const t = q.trim().toUpperCase(); return (t ? STOCKS.filter((s) => s.symbol.includes(t) || s.name.toUpperCase().includes(t)) : STOCKS).slice(0, 8); }, [q]);
+  return (
+    <div ref={ref} className="relative">
+      <button onClick={() => !disabled && setShow((s) => !s)} disabled={disabled} title="add a chart" className="grid h-6 w-6 place-items-center rounded-md border border-border font-mono text-[0.8rem] leading-none text-muted-foreground transition-colors hover:border-signal/40 hover:text-signal disabled:opacity-30">＋</button>
+      {show && (
+        <div className="absolute right-0 top-full z-[60] mt-1.5 w-60 overflow-hidden rounded-xl border border-border bg-[#0d0d10] p-1 shadow-2xl">
+          <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="add a chart — ticker or company…" className="mb-1 w-full rounded-lg border border-border bg-[#0b0b0d] px-2.5 py-1.5 text-[0.76rem] outline-none placeholder:text-muted-foreground/50 focus:border-signal/40" />
+          <div className="max-h-64 overflow-auto">
+            {results.map((s) => { const on = openSymbols.includes(s.symbol); const qt = quotes[s.symbol]; return (
+              <button key={s.symbol} onClick={() => { onPick(s.symbol); setShow(false); setQ(""); }} className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/[0.04]">
+                <Logo s={s.symbol} size={18} /><span className="w-12 shrink-0 font-mono text-[0.76rem] text-foreground">{s.symbol}</span>
+                <span className="min-w-0 flex-1 truncate text-[0.72rem] text-muted-foreground">{s.name}</span>
+                {on ? <span className="shrink-0 font-mono text-[0.5rem] uppercase tracking-widest text-signal/60">open</span> : qt && <span className={`shrink-0 font-mono text-[0.68rem] tabular-nums ${qt.changePct >= 0 ? "text-signal" : "text-[#ff5a5a]"}`}>{pct(qt.changePct)}</span>}
               </button>
             ); })}
           </div>
-        </aside>
-        {/* right: header (drag handle) + active view */}
-        <div className="flex min-w-0 flex-1 flex-col">
-          <header onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp}
-            className={`flex h-10 shrink-0 items-center justify-between border-b border-border pl-4 pr-2 ${max ? "" : "cursor-grab active:cursor-grabbing"}`}>
-            <span className="select-none font-mono text-[0.7rem] uppercase tracking-[0.16em] text-foreground">{title}</span>
-            <div className="flex items-center gap-1" onPointerDown={(e) => e.stopPropagation()}>
-              <button onClick={() => setMax((m) => !m)} title={max ? "restore" : "maximize"} className="grid h-6 w-6 place-items-center rounded-md text-[0.8rem] text-muted-foreground/60 transition-colors hover:bg-white/5 hover:text-signal">{max ? "❐" : "⤢"}</button>
-              <button onClick={onClose} title="close (Esc)" className="grid h-6 w-6 place-items-center rounded-md text-[0.95rem] leading-none text-muted-foreground/60 transition-colors hover:bg-[#ff5a5a]/15 hover:text-[#ff5a5a]">×</button>
-            </div>
-          </header>
-          <div className="min-h-0 flex-1 overflow-auto">{render(view)}</div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
