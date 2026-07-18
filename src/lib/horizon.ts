@@ -10,7 +10,7 @@ import { getActiveBinding, FREE_MODEL } from "./agents";
 export type HAction =
   | { tool: "selectSymbol"; symbol: string }
   | { tool: "openChart"; symbol: string }
-  | { tool: "setTimeframe"; range: "1m" | "3m" | "6m" | "1y" }
+  | { tool: "setTimeframe"; range: "1D" | "5D" | "1M" | "3M" | "6M" | "1Y" }
   | { tool: "addIndicator"; name: "MA" | "EMA" | "BOLL" | "RSI" | "MACD" | "KDJ" | "VOL" }
   | { tool: "clearIndicators" }
   | { tool: "drawTrendline"; from: { t: number; price: number }; to: { t: number; price: number }; label?: string }
@@ -23,14 +23,19 @@ export type HAction =
   | { tool: "proposeTrade"; side: "buy" | "sell"; symbol: string; amount: number };
 
 export type HorizonReply = { say: string; actions: HAction[] };
-export type HorizonCtx = { symbol: string; range: string; candles: Candle[]; indicators?: Indicators | null; universe: string[] };
+export type Persona = { name: string; mandate?: string; risk?: string; note?: string };
+export type HorizonCtx = { symbol: string; range: string; candles: Candle[]; indicators?: Indicators | null; universe: string[]; persona?: Persona | null };
 export type HMsg = { role: "user" | "assistant"; content: string };
 
 const MODEL_FALLBACK: Record<string, string> = { anthropic: "claude-sonnet-5", openrouter: "anthropic/claude-sonnet-5" };
 
 function systemPrompt(ctx: HorizonCtx): string {
+  const p = ctx.persona;
+  const persona = p?.name
+    ? `You are "${p.name}", the user's own named terminal agent${p.mandate ? ` — a ${p.mandate} desk` : ""}${p.risk ? `, ${p.risk} risk appetite` : ""}.${p.note ? ` Directive: ${p.note}.` : ""} Stay in this persona.`
+    : "You are the terminal's analyst agent.";
   return [
-    "You are the terminal's analyst agent. You don't just talk — you OPERATE a Bloomberg-style trading terminal through tools, and the user watches your cursor draw.",
+    `${persona} You don't just talk — you OPERATE a Bloomberg-style trading terminal through tools, and the user watches your cursor draw.`,
     "Reason over the REAL candles and indicators given. NEVER invent prices, timestamps, or stats. This is not investment advice.",
     "",
     "FORMAT — reply in natural prose: a crisp 1-3 sentence read (lowercase-ok). This STREAMS live to the user, so write it first.",
@@ -41,7 +46,7 @@ function systemPrompt(ctx: HorizonCtx): string {
     "Put NOTHING after the closing fence. Omit the whole block when no action is needed.",
     "An @source in the user message (@news @sec @macro @market @ratings @onchain @polymarket) = consult that data — checkNews and/or openPanel the matching panel.",
     "Each HAction in the array is one of:",
-    `{"tool":"selectSymbol","symbol":"TSLA"} (retarget the active chart) · {"tool":"openChart","symbol":"TSLA"} (open a NEW chart, up to 4 — a playground) · {"tool":"setTimeframe","range":"1m|3m|6m|1y"}`,
+    `{"tool":"selectSymbol","symbol":"TSLA"} (retarget the active chart) · {"tool":"openChart","symbol":"TSLA"} (open a NEW chart, up to 4 — a playground) · {"tool":"setTimeframe","range":"1D|5D|1M|3M|6M|1Y"} (1D/5D are intraday)`,
     `{"tool":"addIndicator","name":"MA|EMA|BOLL|RSI|MACD|KDJ|VOL"} · {"tool":"clearIndicators"}`,
     `{"tool":"drawTrendline","from":{"t":<unix_sec>,"price":<n>},"to":{"t":<unix_sec>,"price":<n>},"label":"uptrend"}`,
     `{"tool":"drawHLine","price":<n>,"label":"support"} · {"tool":"marker","t":<unix_sec>,"price":<n>,"text":"breakout"}`,
@@ -68,7 +73,7 @@ function grounding(ctx: HorizonCtx, userText: string): string {
     : "n/a";
   const rows = tail.map((k) => `${k.t}|${k.o.toFixed(2)}|${k.h.toFixed(2)}|${k.l.toFixed(2)}|${k.c.toFixed(2)}`).join("\n");
   return [
-    `CHART: ${ctx.symbol} · ${ctx.range} · daily candles`,
+    `CHART: ${ctx.symbol} · ${ctx.range} (${ctx.range === "1D" || ctx.range === "5D" ? "intraday" : "daily"} candles)`,
     `INDICATORS: ${indLine}`,
     `SWING HIGH: $${hi.h.toFixed(2)} @ t=${hi.t}  ·  SWING LOW: $${lo.l.toFixed(2)} @ t=${lo.t}`,
     `CANDLES (t=unix_sec | o|h|l|c), oldest→newest:`,
@@ -79,6 +84,15 @@ function grounding(ctx: HorizonCtx, userText: string): string {
 }
 
 export type HorizonOpts = { onStatus?: (s: string) => void; onText?: (visible: string) => void };
+
+// the visible reply is everything before the actions payload — cut at a fence OR a bare tool/JSON
+// blob so a model that forgets to fence its actions doesn't dump raw JSON into the chat (the "spam" bug)
+function visibleText(raw: string): string {
+  const marks = ["```", '[{"tool"', '{"tool"', '{"say"', '{"actions"', '\n[\n', '\n[{'];
+  let cut = raw.length;
+  for (const m of marks) { const i = raw.indexOf(m); if (i >= 0 && i < cut) cut = i; }
+  return raw.slice(0, cut).trim();
+}
 
 // stream an SSE body, calling onDelta with each text delta. Handles both OpenAI-style
 // (choices[].delta.content) and Anthropic-style (content_block_delta.delta.text).
@@ -118,8 +132,7 @@ export async function runHorizon(userText: string, ctx: HorizonCtx, history: HMs
   const onDelta = (d: string) => {
     raw += d;
     if (!started) { started = true; opts.onStatus?.(""); }
-    const fi = raw.indexOf("```"); // the visible reply is everything before the actions fence
-    opts.onText?.((fi >= 0 ? raw.slice(0, fi) : raw).trim());
+    opts.onText?.(visibleText(raw));
   };
 
   if (binding.free || !binding.key) {
@@ -150,7 +163,7 @@ export async function runHorizon(userText: string, ctx: HorizonCtx, history: HMs
 // prose + ```actions [ … ] ``` (with a legacy {say,actions} JSON fallback)
 function parse(text: string): HorizonReply {
   const fence = text.match(/```(?:actions|json)?\s*([\s\S]*?)```/i);
-  const say = (fence ? text.slice(0, text.indexOf(fence[0])) : text).trim().slice(0, 900);
+  const say = visibleText(text).slice(0, 900);
   let actions: HAction[] = [];
   const grab = (body: string) => {
     const s = body.indexOf("["), e = body.lastIndexOf("]");

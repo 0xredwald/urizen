@@ -38,7 +38,7 @@ function ChartPanel({ id, symbol, range, active, closable, onFocus, onClose, onH
       </div>
       <div className="min-h-0 flex-1">
         {candles.length > 1
-          ? <KlineChart ref={(h) => onHandle(id, h)} candles={candles} symbol={symbol} />
+          ? <KlineChart ref={(h) => onHandle(id, h)} candles={candles} symbol={symbol} range={range} />
           : <div className="grid h-full place-items-center font-mono text-[0.66rem] uppercase tracking-widest text-muted-foreground/40">loading…</div>}
       </div>
     </div>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { useAccount } from "wagmi";
 import { type ChartHandle } from "@/components/terminal/kline-chart";
@@ -13,10 +14,12 @@ import { TVEconCalendar, TVHeatmap } from "@/components/terminal/tv-widgets";
 import { UrizenMark } from "@/components/brand/marks";
 import { STOCKS } from "@/lib/stocks";
 import { runHorizon, type HAction, type HMsg } from "@/lib/horizon";
-import { unlockVault } from "@/lib/agents";
+import { unlockVault, listAgents, saveAgent, type Agent } from "@/lib/agents";
+import { NewAgentModal } from "@/components/alpha/new-agent-modal";
 import { matchSlash, resolveSlashCommand, SlashMenu, SkillsModal } from "@/components/alpha/skills-panel";
 import { ALL_SKILL_IDS } from "@/components/alpha/skills";
 import { matchAt, type Source } from "@/components/alpha/sources";
+import { Thinking } from "@/components/alpha/thinking";
 import type { Candle } from "@/lib/quant";
 
 // ── Horizon Terminal — P1 shell ──────────────────────────────────────────────
@@ -26,7 +29,7 @@ import type { Candle } from "@/lib/quant";
 
 type Quote = { price: number; changePct: number };
 type Mover = { symbol: string; name: string; price: number; changePct: number };
-const RANGES = ["1m", "3m", "6m", "1y"] as const;
+const RANGES = ["1D", "5D", "1M", "3M", "6M", "1Y"] as const;
 type Range = (typeof RANGES)[number];
 const logo = (s: string) => `https://financialmodelingprep.com/image-stock/${s}.png`;
 const fmt = (n: number, d = 2) => n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
@@ -34,7 +37,7 @@ const pct = (n: number) => `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
 
 // the panels the user (and the agent) can add/close in the centre workspace
 const ALL_PANELS: { id: string; title: string }[] = [
-  { id: "news", title: "News" }, { id: "gainers", title: "Top gainers" }, { id: "losers", title: "Top losers" },
+  { id: "watch", title: "Watchlist" }, { id: "news", title: "News" }, { id: "gainers", title: "Top gainers" }, { id: "losers", title: "Top losers" },
   { id: "ratings", title: "Analyst ratings" }, { id: "fundamentals", title: "Fundamentals" },
   { id: "macro", title: "Macro" }, { id: "predictions", title: "Prediction markets" }, { id: "onchain", title: "On-chain" },
   { id: "calendar", title: "Economic calendar" }, { id: "heatmap", title: "Heatmap" },
@@ -71,7 +74,7 @@ export function TerminalShell() {
   const [charts, setCharts] = useState<{ id: string; symbol: string }[]>([{ id: "c1", symbol: "NVDA" }]);
   const [activeId, setActiveId] = useState("c1");
   const cidRef = useRef(1);
-  const [range, setRange] = useState<Range>("3m");
+  const [range, setRange] = useState<Range>("3M");
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [gainers, setGainers] = useState<Mover[]>([]);
   const [losers, setLosers] = useState<Mover[]>([]);
@@ -87,15 +90,28 @@ export function TerminalShell() {
   const [status, setStatus] = useState("");
   const [pendingTrade, setPendingTrade] = useState<ProposedTrade | null>(null);
   const [keyOpen, setKeyOpen] = useState(false);
-  const [panels, setPanels] = useState<string[]>([]); // clean by default — summon into the dock on demand
+  // ONE unified command panel (a big pop-up with a view selector), not scattered windows.
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [panelView, setPanelView] = useState("news");
+  // named agent personas (persisted in the browser, shared with Alpha via urizen.agents.v1)
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [agentId, setAgentId] = useState<string | null>(null);
+  const [newAgentOpen, setNewAgentOpen] = useState(false);
   const { address, isConnected } = useAccount();
 
-  useEffect(() => { try { const s = localStorage.getItem("urizen.terminal.panels"); if (s) setPanels(JSON.parse(s)); } catch { /* noop */ } }, []);
-  const persistPanels = (p: string[]) => { setPanels(p); try { localStorage.setItem("urizen.terminal.panels", JSON.stringify(p)); } catch { /* noop */ } };
-  const openPanel = (id: string) => { if (ALL_PANELS.some((p) => p.id === id)) persistPanels(panels.includes(id) ? panels : [id, ...panels]); };
-  const closePanel = (id: string) => persistPanels(panels.filter((p) => p !== id));
+  useEffect(() => { setAgents(listAgents()); try { setAgentId(localStorage.getItem("urizen.terminal.agent")); } catch { /* noop */ } }, []);
+  const activeAgent = agents.find((a) => a.id === agentId) ?? agents[0] ?? null;
+  const selectAgent = (id: string) => { setAgentId(id); try { localStorage.setItem("urizen.terminal.agent", id); } catch { /* noop */ } };
+  const createAgent = (a: Agent) => { const all = saveAgent({ ...a, owner: address ?? undefined }); setAgents(all); selectAgent(a.id); setNewAgentOpen(false); };
+  const persona = activeAgent ? { name: activeAgent.name, mandate: activeAgent.mandate, risk: activeAgent.risk, note: activeAgent.note } : null;
+
+  useEffect(() => { try { const s = localStorage.getItem("urizen.terminal.view"); if (s && ALL_PANELS.some((p) => p.id === s)) setPanelView(s); } catch { /* noop */ } }, []);
+  const selectView = (id: string) => { setPanelView(id); try { localStorage.setItem("urizen.terminal.view", id); } catch { /* noop */ } };
+  const openPanel = (id: string) => { if (ALL_PANELS.some((p) => p.id === id)) { selectView(id); setPanelOpen(true); } };
+  const closePanel = () => setPanelOpen(false);
   const renderPanelBody = (id: string) => {
     switch (id) {
+      case "watch": return <WatchBody watch={watch} quotes={quotes} onPick={(s) => { setSelected(s); }} onRemove={toggleWatch} />;
       case "gainers": return <MoversBody rows={gainers} onPick={setSelected} up />;
       case "losers": return <MoversBody rows={losers} onPick={setSelected} />;
       case "news": return <NewsPanel symbol={selected} />;
@@ -132,12 +148,30 @@ export function TerminalShell() {
 
   useEffect(() => { unlockVault(); }, []); // decrypt the BYOK vault so Horizon can reach a key
 
+  const clearDrawings = () => handlesRef.current[activeId]?.clearOverlays();
+  const clearIndicators = () => handlesRef.current[activeId]?.removeIndicators();
+  // Delete / Backspace removes the last drawing (then the last indicator) off the active chart
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Delete" && e.key !== "Backspace") return;
+      const el = document.activeElement as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      const h = handlesRef.current[activeId];
+      if (h && (h.removeLastOverlay() || h.removeLastIndicator())) e.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [activeId]);
+
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
   // execute the agent's actions on the terminal, moving the visible cursor as it goes
   const dispatch = async (actions: HAction[]) => {
     const cur = cursorRef.current;
-    for (const a of actions) {
+    // guard against a misbehaving model: cap the run and drop duplicate actions (the "spam" bug)
+    const seen = new Set<string>();
+    const list = (actions || []).slice(0, 8).filter((a) => { const k = JSON.stringify(a); if (seen.has(k)) return false; seen.add(k); return true; });
+    for (const a of list) {
       const chart = activeHandle();
       try {
         if (a.tool === "selectSymbol") { setStatus(`opening ${a.symbol}…`); setSelected(a.symbol); await wait(900); }
@@ -166,7 +200,7 @@ export function TerminalShell() {
           chart?.createOverlay("simpleAnnotation", [{ timestamp: a.t * 1000, value: a.price }], { extendData: a.text });
           await wait(450);
         } else if (a.tool === "openPanel") { setStatus(`opening ${a.panel}`); openPanel(a.panel); await wait(500);
-        } else if (a.tool === "closePanel") { closePanel(a.panel); await wait(300);
+        } else if (a.tool === "closePanel") { closePanel(); await wait(300);
         } else if (a.tool === "checkNews") {
           const sym = a.symbol || selected; setStatus(`checking ${sym} news…`);
           const news = await fetch(`/api/quant/news?symbol=${encodeURIComponent(sym)}`).then((r) => r.json()).catch(() => null);
@@ -220,7 +254,7 @@ export function TerminalShell() {
     setMessages((m) => [...m, { role: "assistant", content: "" }]); // the bubble we stream into
     const patchLast = (content: string) => setMessages((m) => { const c = [...m]; for (let i = c.length - 1; i >= 0; i--) { if (c[i].role === "assistant") { c[i] = { ...c[i], content }; break; } } return c; });
     try {
-      const reply = await runHorizon(t, { symbol: selected, range, candles, indicators: null, universe: STOCKS.map((s) => s.symbol) }, history, {
+      const reply = await runHorizon(t, { symbol: selected, range, candles, indicators: null, universe: STOCKS.map((s) => s.symbol), persona }, history, {
         onStatus: (s) => setStatus(s),
         onText: (visible) => { if (visible) patchLast(visible); },
       });
@@ -290,14 +324,15 @@ export function TerminalShell() {
       {/* the visible agent cursor (fixed overlay) */}
       <HorizonCursor ref={cursorRef} />
       <KeyModal open={keyOpen} onClose={() => setKeyOpen(false)} onChanged={() => {}} />
+      {newAgentOpen && <NewAgentModal onClose={() => setNewAgentOpen(false)} onCreate={createAgent} />}
 
       {/* ── top bar ── */}
       <header className="relative z-40 flex h-[52px] shrink-0 items-center gap-4 border-b border-border bg-[#0a0a0b]/80 px-4 backdrop-blur-md">
-        <a href="/" className="flex items-center gap-2">
+        <Link href="/" className="flex items-center gap-2">
           <span className="grid h-7 w-7 place-items-center rounded-[5px] bg-signal/15"><UrizenMark className="h-3.5 w-auto text-signal" /></span>
           <span className="font-display text-[15px] font-bold tracking-tight">Terminal</span>
           <span className="hidden rounded-full border border-white/15 px-2 py-0.5 font-mono text-[0.58rem] uppercase tracking-[0.18em] text-muted-foreground sm:inline">URIZEN</span>
-        </a>
+        </Link>
         <div className="relative hidden max-w-md flex-1 items-center sm:flex">
           <SymbolSearch onPick={setSelected} quotes={quotes} />
         </div>
@@ -370,10 +405,15 @@ export function TerminalShell() {
             {session && <span className="hidden shrink-0 rounded-full border border-signal/25 bg-signal/10 px-2 py-0.5 font-mono text-[0.54rem] uppercase tracking-widest text-signal xl:inline">{session}</span>}
             <div className="ml-auto flex shrink-0 items-center gap-1.5">
               <div className="flex items-center rounded-md border border-border p-0.5">
-                {RANGES.map((r) => <button key={r} onClick={() => setRange(r)} className={`rounded px-2 py-0.5 font-mono text-[0.6rem] uppercase transition-colors ${range === r ? "bg-signal/15 text-signal" : "text-muted-foreground hover:text-foreground"}`}>{r}</button>)}
+                {RANGES.map((r) => <button key={r} onClick={() => setRange(r)} className={`rounded px-1.5 py-0.5 font-mono text-[0.6rem] uppercase transition-colors ${range === r ? "bg-signal/15 text-signal" : "text-muted-foreground hover:text-foreground"}`}>{r}</button>)}
+              </div>
+              {/* erase what's on the chart — drawings, then indicators (Del key also removes the last one) */}
+              <div className="hidden items-center rounded-md border border-border p-0.5 md:flex">
+                <button onClick={clearDrawings} title="clear drawings (Del)" className="grid h-5 w-6 place-items-center rounded font-mono text-[0.7rem] leading-none text-muted-foreground transition-colors hover:bg-white/5 hover:text-[#ff5a5a]">✎</button>
+                <button onClick={clearIndicators} title="clear indicators" className="grid h-5 w-6 place-items-center rounded font-mono text-[0.72rem] leading-none text-muted-foreground transition-colors hover:bg-white/5 hover:text-[#ff5a5a]">∿</button>
               </div>
               <button onClick={addNextChart} disabled={charts.length >= 4} title="add a chart" className="grid h-6 w-6 place-items-center rounded-md border border-border font-mono text-[0.8rem] leading-none text-muted-foreground transition-colors hover:border-signal/40 hover:text-signal disabled:opacity-30">＋</button>
-              <PanelMenu open={panels} onToggle={(id) => (panels.includes(id) ? closePanel(id) : openPanel(id))} />
+              <button onClick={() => setPanelOpen(true)} title="panels (news, ratings, watch…)" className={`flex items-center gap-1 rounded-md border px-2 py-1 font-mono text-[0.6rem] uppercase tracking-wide transition-colors ${panelOpen ? "border-signal/40 text-signal" : "border-border text-muted-foreground hover:text-foreground"}`}>▦ panels</button>
             </div>
           </header>
           <div className="min-h-0 flex-1">
@@ -383,18 +423,18 @@ export function TerminalShell() {
 
         {/* RIGHT: the terminal agent */}
         <HorizonRail selected={selected} messages={messages} busy={busy} status={status} onAsk={ask}
-          pendingTrade={pendingTrade} taker={address ?? null} onClearTrade={() => setPendingTrade(null)} onSettings={() => setKeyOpen(true)} connected={isConnected} />
+          pendingTrade={pendingTrade} taker={address ?? null} onClearTrade={() => setPendingTrade(null)} onSettings={() => setKeyOpen(true)} connected={isConnected}
+          agents={agents} activeAgent={activeAgent} onSelectAgent={selectAgent} onNewAgent={() => setNewAgentOpen(true)} />
       </div>
 
-      {/* one unified, tabbed pop-up dock — every summoned panel is a tab here, never a scattered
-          window. Draggable, resizable, maximizable. Empty → nothing renders (chart stays vanilla). */}
-      <PanelDock panels={panels} titleOf={(id) => ALL_PANELS.find((x) => x.id === id)?.title ?? id}
-        render={renderPanelBody} onCloseTab={closePanel} onCloseAll={() => persistPanels([])} />
+      {/* ONE big command panel — a dimmed-backdrop pop-up with a view selector on the left. The user
+          (and the agent) pick a view (news, ratings, watch, heatmap…); optionally draggable. */}
+      <CommandPanel open={panelOpen} view={panelView} onView={selectView} onClose={closePanel} render={renderPanelBody} />
 
       {/* ── bottom status bar ── */}
       <footer className="relative z-10 flex h-7 shrink-0 items-center gap-4 border-t border-border bg-[#0a0a0b]/90 px-4 font-mono text-[0.62rem] text-muted-foreground">
-        <span className="flex items-center gap-1.5 text-signal"><span className="h-1.5 w-1.5 rounded-full bg-signal" />terminal · live</span>
-        <span className="hidden text-muted-foreground/50 sm:inline">{selected} · {range} · {charts.length} chart{charts.length === 1 ? "" : "s"} · {panels.length} panel{panels.length === 1 ? "" : "s"}</span>
+        <span className="flex items-center gap-1.5 text-signal"><span className="h-1.5 w-1.5 rounded-full bg-signal" />terminal</span>
+        <span className="hidden text-muted-foreground/50 sm:inline">{selected} · {range} · {charts.length} chart{charts.length === 1 ? "" : "s"}{panelOpen ? ` · ${ALL_PANELS.find((p) => p.id === panelView)?.title ?? "panel"}` : ""}</span>
         <span className="ml-auto hidden gap-4 md:flex">
           <span><kbd className="text-foreground">/</kbd> search</span>
           <span><kbd className="text-foreground">+</kbd> add panel</span>
@@ -409,69 +449,69 @@ function Empty({ children }: { children: React.ReactNode }) {
   return <div className="grid h-full place-items-center font-mono text-[0.7rem] uppercase tracking-widest text-muted-foreground/50">{children}</div>;
 }
 
-// A compact dropdown in the chart header to summon/dismiss panels (they open in the dock below).
-function PanelMenu({ open, onToggle }: { open: string[]; onToggle: (id: string) => void }) {
-  const [show, setShow] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => { const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setShow(false); }; document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h); }, []);
+// ── the ONE big command panel — a dimmed-backdrop pop-up with a left view selector. The user (and
+// the agent) pick a view; everything behind dims. Optionally draggable + resizable + maximizable. ──
+function CommandPanel({ open, view, onView, onClose, render }: { open: boolean; view: string; onView: (id: string) => void; onClose: () => void; render: (id: string) => React.ReactNode }) {
+  const [off, setOff] = useState({ x: 0, y: 0 });
+  const [max, setMax] = useState(false);
+  const drag = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
+  useEffect(() => { if (!open) return; const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); }; window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey); }, [open, onClose]);
+  if (!open) return null;
+  const onDown = (e: React.PointerEvent) => { if (max) return; drag.current = { sx: e.clientX, sy: e.clientY, ox: off.x, oy: off.y }; (e.currentTarget as Element).setPointerCapture(e.pointerId); };
+  const onMove = (e: React.PointerEvent) => { if (!drag.current) return; setOff({ x: drag.current.ox + (e.clientX - drag.current.sx), y: drag.current.oy + (e.clientY - drag.current.sy) }); };
+  const onUp = (e: React.PointerEvent) => { drag.current = null; try { (e.currentTarget as Element).releasePointerCapture(e.pointerId); } catch { /* */ } };
+  const title = ALL_PANELS.find((p) => p.id === view)?.title ?? view;
   return (
-    <div ref={ref} className="relative">
-      <button onClick={() => setShow((s) => !s)} className={`flex items-center gap-1 rounded-md border px-2 py-1 font-mono text-[0.6rem] uppercase tracking-wide transition-colors ${show || open.length ? "border-signal/40 text-signal" : "border-border text-muted-foreground hover:text-foreground"}`}>
-        ＋ panels{open.length ? <span className="text-signal">· {open.length}</span> : null}
-      </button>
-      {show && (
-        <div className="absolute right-0 top-full z-[60] mt-1.5 w-52 overflow-hidden rounded-xl border border-border bg-[#0d0d10] p-1 shadow-2xl">
-          <div className="px-2.5 py-1 font-mono text-[0.54rem] uppercase tracking-widest text-muted-foreground/50">open a panel</div>
-          {ALL_PANELS.map((p) => { const on = open.includes(p.id); return (
-            <button key={p.id} onClick={() => onToggle(p.id)} className={`flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-[0.76rem] transition-colors ${on ? "text-signal" : "text-muted-foreground hover:bg-white/[0.04] hover:text-foreground"}`}>
-              {p.title}
-              <span className={`grid h-4 w-4 place-items-center rounded border text-[0.6rem] ${on ? "border-signal/50 bg-signal/15 text-signal" : "border-border text-transparent"}`}>✓</span>
-            </button>
-          ); })}
+    <div className="fixed inset-0 z-[80] grid place-items-center bg-black/55 backdrop-blur-[2px]" onPointerDown={onClose}>
+      <div onPointerDown={(e) => e.stopPropagation()}
+        style={max
+          ? { width: "94vw", height: "86vh" }
+          : { width: "min(1040px, 92vw)", height: "min(680px, 82vh)", transform: `translate(${off.x}px, ${off.y}px)` }}
+        className="flex overflow-hidden rounded-2xl border border-signal/25 bg-[#0b0b0d]/95 shadow-2xl backdrop-blur-md">
+        {/* left: view selector */}
+        <aside className="flex w-44 shrink-0 flex-col border-r border-border bg-white/[0.02]">
+          <div className="flex h-10 items-center px-3.5 font-mono text-[0.6rem] uppercase tracking-[0.16em] text-muted-foreground/60">Panels</div>
+          <div className="min-h-0 flex-1 overflow-auto px-1.5 pb-2">
+            {ALL_PANELS.map((p) => { const on = p.id === view; return (
+              <button key={p.id} onClick={() => onView(p.id)} className={`mb-0.5 flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-mono text-[0.72rem] transition-colors ${on ? "bg-signal/12 text-signal" : "text-muted-foreground hover:bg-white/[0.04] hover:text-foreground"}`}>
+                <span className={`h-1 w-1 rounded-full ${on ? "bg-signal" : "bg-transparent"}`} />{p.title}
+              </button>
+            ); })}
+          </div>
+        </aside>
+        {/* right: header (drag handle) + active view */}
+        <div className="flex min-w-0 flex-1 flex-col">
+          <header onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp}
+            className={`flex h-10 shrink-0 items-center justify-between border-b border-border pl-4 pr-2 ${max ? "" : "cursor-grab active:cursor-grabbing"}`}>
+            <span className="select-none font-mono text-[0.7rem] uppercase tracking-[0.16em] text-foreground">{title}</span>
+            <div className="flex items-center gap-1" onPointerDown={(e) => e.stopPropagation()}>
+              <button onClick={() => setMax((m) => !m)} title={max ? "restore" : "maximize"} className="grid h-6 w-6 place-items-center rounded-md text-[0.8rem] text-muted-foreground/60 transition-colors hover:bg-white/5 hover:text-signal">{max ? "❐" : "⤢"}</button>
+              <button onClick={onClose} title="close (Esc)" className="grid h-6 w-6 place-items-center rounded-md text-[0.95rem] leading-none text-muted-foreground/60 transition-colors hover:bg-[#ff5a5a]/15 hover:text-[#ff5a5a]">×</button>
+            </div>
+          </header>
+          <div className="min-h-0 flex-1 overflow-auto">{render(view)}</div>
         </div>
-      )}
+      </div>
     </div>
   );
 }
 
-// ── the unified panel dock — ONE draggable/resizable/maximizable pop-up. Every summoned panel is a
-// tab here (order book, news, ratings…), so panels never scatter into overlapping windows. ──
-function PanelDock({ panels, titleOf, render, onCloseTab, onCloseAll }: { panels: string[]; titleOf: (id: string) => string; render: (id: string) => React.ReactNode; onCloseTab: (id: string) => void; onCloseAll: () => void }) {
-  const [active, setActive] = useState(panels[panels.length - 1] ?? "");
-  const [pos, setPos] = useState({ x: 360, y: 150 });
-  const [max, setMax] = useState(false);
-  const drag = useRef<{ sx: number; sy: number; px: number; py: number } | null>(null);
-  useEffect(() => { if (panels.length && !panels.includes(active)) setActive(panels[panels.length - 1]); }, [panels, active]);
-  if (!panels.length) return null;
-  const onDown = (e: React.PointerEvent) => { if (max) return; drag.current = { sx: e.clientX, sy: e.clientY, px: pos.x, py: pos.y }; (e.currentTarget as Element).setPointerCapture(e.pointerId); };
-  const onMove = (e: React.PointerEvent) => { if (!drag.current) return; setPos({ x: Math.max(8, drag.current.px + (e.clientX - drag.current.sx)), y: Math.max(64, drag.current.py + (e.clientY - drag.current.sy)) }); };
-  const onUp = (e: React.PointerEvent) => { drag.current = null; try { (e.currentTarget as Element).releasePointerCapture(e.pointerId); } catch { /* */ } };
-  const activeId = panels.includes(active) ? active : panels[panels.length - 1];
+// the watchlist as a full panel view — pick a symbol or unpin it
+function WatchBody({ watch, quotes, onPick, onRemove }: { watch: string[]; quotes: Record<string, { price: number; changePct: number }>; onPick: (s: string) => void; onRemove: (s: string) => void }) {
+  if (!watch.length) return <Empty>★ a market to pin it</Empty>;
   return (
-    <div
-      style={max
-        ? { left: "3vw", top: 82, width: "94vw", height: "78vh", zIndex: 70 }
-        : { left: pos.x, top: pos.y, width: 480, height: 420, minWidth: 340, minHeight: 260, maxWidth: "92vw", zIndex: 70, resize: "both" }}
-      className="fixed flex flex-col overflow-hidden rounded-xl border border-signal/25 bg-[#0b0b0d]/95 shadow-2xl backdrop-blur-md">
-      {/* tab strip doubles as the drag handle */}
-      <header onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp}
-        className={`flex h-9 shrink-0 items-stretch gap-1 border-b border-border pl-2 pr-1.5 ${max ? "" : "cursor-grab active:cursor-grabbing"}`}>
-        <span className="grid select-none place-items-center pr-1 text-[0.7rem] text-muted-foreground/40">⠿</span>
-        <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none]" onPointerDown={(e) => e.stopPropagation()}>
-          {panels.map((id) => { const on = id === activeId; return (
-            <div key={id} className={`group flex h-7 shrink-0 items-center gap-1.5 self-center rounded-md pl-2.5 pr-1.5 font-mono text-[0.62rem] uppercase tracking-wide transition-colors ${on ? "bg-signal/12 text-signal" : "text-muted-foreground hover:bg-white/[0.04] hover:text-foreground"}`}>
-              <button onClick={() => setActive(id)}>{titleOf(id)}</button>
-              <button onClick={() => onCloseTab(id)} title="close tab" className={`grid h-4 w-4 place-items-center rounded text-[0.8rem] leading-none transition-all hover:bg-[#ff5a5a]/15 hover:text-[#ff5a5a] ${on ? "text-signal/60" : "text-muted-foreground/40 opacity-0 group-hover:opacity-100"}`}>×</button>
-            </div>
-          ); })}
-        </div>
-        <div className="flex shrink-0 items-center gap-1 self-center" onPointerDown={(e) => e.stopPropagation()}>
-          <button onClick={() => setMax((m) => !m)} title={max ? "restore" : "maximize"} className="grid h-6 w-6 place-items-center rounded-md text-[0.8rem] text-muted-foreground/60 transition-colors hover:bg-white/5 hover:text-signal">{max ? "❐" : "⤢"}</button>
-          <button onClick={onCloseAll} title="close dock" className="grid h-6 w-6 place-items-center rounded-md text-[0.95rem] leading-none text-muted-foreground/60 transition-colors hover:bg-[#ff5a5a]/15 hover:text-[#ff5a5a]">×</button>
-        </div>
-      </header>
-      <div className="min-h-0 flex-1 overflow-auto">{render(activeId)}</div>
-    </div>
+    <table className="w-full border-collapse text-[0.8rem]">
+      <tbody>
+        {watch.map((sym) => { const q = quotes[sym]; return (
+          <tr key={sym} onClick={() => onPick(sym)} className="cursor-pointer border-b border-border/40 hover:bg-white/[0.03]">
+            <td className="py-2 pl-4 pr-2"><div className="flex items-center gap-2.5"><Logo s={sym} size={18} /><span className="font-mono">{sym}</span></div></td>
+            <td className="py-2 pr-3 text-right font-mono tabular-nums text-foreground/90">{q ? fmt(q.price) : "—"}</td>
+            <td className={`py-2 pr-3 text-right font-mono tabular-nums ${q ? (q.changePct >= 0 ? "text-signal" : "text-[#ff5a5a]") : "text-muted-foreground/40"}`}>{q ? pct(q.changePct) : "—"}</td>
+            <td className="py-2 pr-4 text-right"><button onClick={(e) => { e.stopPropagation(); onRemove(sym); }} className="text-muted-foreground/40 hover:text-[#ff5a5a]">×</button></td>
+          </tr>
+        ); })}
+      </tbody>
+    </table>
   );
 }
 
@@ -552,8 +592,11 @@ function renderMd(text: string): React.ReactNode {
 }
 
 // ── Horizon agent rail — a real chat that operates the terminal ──
-function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrade, taker, onClearTrade, onSettings, connected }: { selected: string; messages: HMsg[]; busy: boolean; status: string; onAsk: (t: string) => void; pendingTrade: ProposedTrade | null; taker: string | null; onClearTrade: () => void; onSettings: () => void; connected: boolean }) {
+function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrade, taker, onClearTrade, onSettings, connected, agents, activeAgent, onSelectAgent, onNewAgent }: { selected: string; messages: HMsg[]; busy: boolean; status: string; onAsk: (t: string) => void; pendingTrade: ProposedTrade | null; taker: string | null; onClearTrade: () => void; onSettings: () => void; connected: boolean; agents: Agent[]; activeAgent: Agent | null; onSelectAgent: (id: string) => void; onNewAgent: () => void }) {
   const [input, setInput] = useState("");
+  const [agentMenu, setAgentMenu] = useState(false);
+  const agentRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { const h = (e: MouseEvent) => { if (agentRef.current && !agentRef.current.contains(e.target as Node)) setAgentMenu(false); }; document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h); }, []);
   const [enabled, setEnabled] = useState<string[]>(ALL_SKILL_IDS);
   const [showSkills, setShowSkills] = useState(false);
   const [slashIdx, setSlashIdx] = useState(0);
@@ -576,8 +619,26 @@ function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrade, ta
   const send = () => { const raw = input; setInput(""); setSlashIdx(0); setAtIdx(0); const r = resolveSlashCommand(raw); onAsk(r ? r.skill.prompt(r.arg) : raw); };
 
   return (
-    <Pane n={3} title="Agent" right={
-      <div className="flex items-center gap-2">
+    <Pane n={3} title={activeAgent?.name || "Agent"} right={
+      <div className="flex items-center gap-1.5">
+        {/* persona selector — name or switch agents */}
+        <div ref={agentRef} className="relative">
+          <button onClick={() => setAgentMenu((v) => !v)} title="switch persona" className="flex items-center gap-1 rounded-md border border-border px-2 py-1 font-mono text-[0.58rem] uppercase tracking-wide text-muted-foreground transition-colors hover:border-signal/40 hover:text-signal">
+            {activeAgent ? activeAgent.name : "＋ agent"} <span className="text-muted-foreground/50">▾</span>
+          </button>
+          {agentMenu && (
+            <div className="absolute right-0 top-full z-[60] mt-1.5 w-52 overflow-hidden rounded-xl border border-border bg-[#0d0d10] p-1 shadow-2xl">
+              <div className="px-2.5 py-1 font-mono text-[0.54rem] uppercase tracking-widest text-muted-foreground/50">persona</div>
+              {agents.map((a) => (
+                <button key={a.id} onClick={() => { onSelectAgent(a.id); setAgentMenu(false); }} className={`flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.74rem] transition-colors ${a.id === activeAgent?.id ? "text-signal" : "text-muted-foreground hover:bg-white/[0.04] hover:text-foreground"}`}>
+                  <span className="truncate">{a.name}</span><span className="shrink-0 font-mono text-[0.5rem] uppercase tracking-widest text-muted-foreground/50">{a.mandate}</span>
+                </button>
+              ))}
+              <button onClick={() => { onNewAgent(); setAgentMenu(false); }} className={`mt-0.5 flex w-full items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-left font-mono text-[0.62rem] uppercase tracking-wide text-signal transition-colors hover:bg-signal/10 ${agents.length ? "border-t border-border" : ""}`}>＋ new agent</button>
+              <Link href="/settings" className="flex w-full items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-left font-mono text-[0.6rem] uppercase tracking-wide text-muted-foreground transition-colors hover:bg-white/[0.04] hover:text-foreground">settings ↗</Link>
+            </div>
+          )}
+        </div>
         <button onClick={onSettings} title="Connect intelligence / API key" className="grid h-6 w-6 place-items-center rounded-md border border-border text-muted-foreground transition-colors hover:border-signal/50 hover:bg-signal/10 hover:text-signal">
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
         </button>
@@ -590,9 +651,17 @@ function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrade, ta
             <div className="flex items-start gap-2.5">
               <span className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full border border-signal/40 bg-signal/10"><UrizenMark className="h-3.5 w-auto text-signal" /></span>
               <div className="rounded-xl rounded-tl-sm border border-border bg-white/[0.03] p-3 text-[0.82rem] leading-relaxed text-foreground/90">
-                i run this terminal. tell me what to look at — i&apos;ll read the tape, draw on the chart, pull news, open panels, and set up trades for you to sign.
+                {activeAgent
+                  ? <>i&apos;m <span className="text-signal">{activeAgent.name}</span> — your {activeAgent.mandate.toLowerCase()} desk. tell me what to look at and i&apos;ll read the tape, draw on the chart, pull news, open panels, and set up trades for you to sign.</>
+                  : <>i run this terminal. tell me what to look at — i&apos;ll read the tape, draw on the chart, pull news, open panels, and set up trades for you to sign.</>}
               </div>
             </div>
+            {!activeAgent && (
+              <button onClick={onNewAgent} className="flex w-full items-center gap-2.5 rounded-xl border border-signal/30 bg-signal/[0.05] p-3 text-left transition-colors hover:bg-signal/10">
+                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-signal/30 bg-signal/10 text-signal">✦</span>
+                <span className="min-w-0"><span className="block font-mono text-[0.68rem] uppercase tracking-widest text-signal">name your agent</span><span className="block text-[0.74rem] leading-snug text-muted-foreground">give it a persona, mandate &amp; risk — it shapes how it reads the tape.</span></span>
+              </button>
+            )}
             <InlineKeySetup onMore={onSettings} />
             <div className="space-y-1.5">
               <div className="font-mono text-[0.58rem] uppercase tracking-widest text-muted-foreground/60">try</div>
@@ -613,12 +682,11 @@ function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrade, ta
           return (
             <div key={i} className="flex items-start gap-2.5">
               <span className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full border border-signal/40 bg-signal/10"><UrizenMark className="h-3.5 w-auto text-signal" /></span>
-              <div className="max-w-[88%] space-y-0.5 rounded-xl rounded-tl-sm border border-border bg-white/[0.03] px-3 py-2 text-[0.82rem] leading-relaxed text-foreground/90">
-                {m.content
-                  ? <>{renderMd(m.content)}{streaming && <span className="ml-0.5 inline-block h-3.5 w-[2px] translate-y-0.5 animate-pulse bg-signal align-middle" />}</>
-                  : streaming
-                    ? <span className="flex items-center gap-2 font-mono text-[0.72rem] text-signal"><span className="inline-flex gap-1"><span className="h-1 w-1 animate-bounce rounded-full bg-signal [animation-delay:-0.2s]" /><span className="h-1 w-1 animate-bounce rounded-full bg-signal [animation-delay:-0.1s]" /><span className="h-1 w-1 animate-bounce rounded-full bg-signal" /></span>{status || "thinking…"}</span>
-                    : "…"}
+              <div className="msg-in max-w-[88%] space-y-1.5 rounded-xl rounded-tl-sm border border-border bg-white/[0.03] px-3 py-2 text-[0.82rem] leading-relaxed text-foreground/90">
+                {m.content && <div>{renderMd(m.content)}{streaming && !status && <span className="ml-0.5 inline-block h-3.5 w-[2px] translate-y-0.5 animate-pulse bg-signal align-middle" />}</div>}
+                {streaming && status ? <Thinking status={status} /> : null}
+                {!m.content && !status && streaming ? <Thinking status="thinking…" /> : null}
+                {!m.content && !streaming ? <span className="text-muted-foreground/50">…</span> : null}
               </div>
             </div>
           );

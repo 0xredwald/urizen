@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { getQuote, executeQuote, resolveToken, fromRaw, type Quote } from "@/lib/rialto";
+import { getQuote, resolveToken, fromRaw, type Quote } from "@/lib/rialto";
+import { executeSwap } from "@/lib/swap-exec";
 import { ROBINHOOD_CHAIN } from "@/lib/chain";
 
-// A compact trade ticket the Horizon agent raises (proposeTrade) — the user reviews and signs.
-// Non-custodial: the agent only proposes; executeQuote opens the user's wallet. Spot on RH chain
-// via Rialto best-route (USDG cash leg). Buy = spend USDG for the stock; Sell = the stock for USDG.
+// A compact trade ticket the agent raises (proposeTrade) — the user reviews and signs. Non-custodial:
+// the agent only proposes; executeSwap opens the user's wallet, handling token approval + Permit2 the
+// same way the Alpha page buys (the raw send path reverts when USDG/token isn't yet approved). Spot on
+// RH chain via Rialto best-route (USDG cash leg). Buy = spend USDG for the stock; Sell = stock for USDG.
 
 export type ProposedTrade = { side: "buy" | "sell"; symbol: string; amount: number; note?: string };
 
@@ -20,6 +22,7 @@ export function TradeTicket({ trade, taker, onClose }: { trade: ProposedTrade; t
   const [err, setErr] = useState<string | null>(null);
   const [notConfigured, setNotConfigured] = useState(false);
   const [txHash, setTxHash] = useState<string | null>(null);
+  const [execStatus, setExecStatus] = useState("");
   const deb = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -41,10 +44,10 @@ export function TradeTicket({ trade, taker, onClose }: { trade: ProposedTrade; t
 
   const approve = async () => {
     if (!quote || !taker) return;
-    setExecuting(true); setErr(null);
-    try { setTxHash(await executeQuote(quote, taker)); }
+    setExecuting(true); setErr(null); setExecStatus("");
+    try { setTxHash(await executeSwap(quote, taker, pay, setExecStatus)); }
     catch (e) { setErr((e as Error).message); }
-    finally { setExecuting(false); }
+    finally { setExecuting(false); setExecStatus(""); }
   };
 
   const up = trade.side === "buy";
@@ -70,7 +73,7 @@ export function TradeTicket({ trade, taker, onClose }: { trade: ProposedTrade; t
       ) : (
         <button onClick={approve} disabled={!quote || !taker || executing || loading}
           className="mt-2 w-full rounded-lg border border-signal/60 bg-signal/10 px-3 py-2 font-mono text-[0.68rem] uppercase tracking-widest text-signal transition-colors hover:bg-signal/20 disabled:border-border disabled:bg-transparent disabled:text-muted-foreground/50">
-          {!taker ? "connect wallet to sign" : executing ? "confirm in wallet…" : loading ? "routing…" : quote ? "review + sign" : "…"}
+          {!taker ? "connect wallet to sign" : executing ? (execStatus || "confirm in wallet…") : loading ? "routing…" : quote ? "review + sign" : "…"}
         </button>
       )}
     </div>

@@ -3,8 +3,25 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
+import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { UrizenMark } from "@/components/brand/marks";
 import { cn } from "@/lib/utils";
+
+// wallet on the top-right of every page that uses the nav
+function NavWallet() {
+  return (
+    <ConnectButton.Custom>
+      {({ account, chain, openConnectModal, openAccountModal, openChainModal, mounted }) => {
+        const connected = mounted && !!account && !!chain;
+        if (!connected)
+          return <button onClick={openConnectModal} className="hidden shrink-0 items-center gap-2 border border-white/15 px-3.5 py-2.5 font-mono text-[0.8rem] uppercase tracking-[0.1em] text-foreground transition-colors hover:border-signal hover:text-signal sm:inline-flex">Connect</button>;
+        if (chain.unsupported)
+          return <button onClick={openChainModal} className="hidden shrink-0 items-center gap-2 border border-[#ff5a5a]/45 px-3.5 py-2.5 font-mono text-[0.8rem] uppercase tracking-[0.1em] text-[#ff5a5a] transition-colors hover:bg-[#ff5a5a]/10 sm:inline-flex">Wrong net</button>;
+        return <button onClick={openAccountModal} className="hidden shrink-0 items-center gap-2 border border-white/15 px-3 py-2.5 font-mono text-[0.78rem] text-foreground transition-colors hover:border-signal sm:inline-flex"><span className="h-1.5 w-1.5 rounded-full bg-signal" />{account.displayName}</button>;
+      }}
+    </ConnectButton.Custom>
+  );
+}
 
 type NavItem = { label: string; href?: string; children?: { label: string; href: string }[] };
 const LINKS: NavItem[] = [
@@ -109,6 +126,7 @@ export function SiteNav() {
             <span className="hidden sm:inline">Launch Alpha</span>
             <span className="transition-transform duration-200 group-hover:translate-x-0.5">↗</span>
           </Link>
+          <NavWallet />
         </div>
       </nav>
     </header>

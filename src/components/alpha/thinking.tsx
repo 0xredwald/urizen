@@ -5,12 +5,17 @@
 
 const GLYPH: [RegExp, string][] = [
   [/search|web/i, "◍"],
+  [/tape|tick|news|headline/i, "▤"],
+  [/draw|trend|line|level|support|resist/i, "╱"],
+  [/mark|annot/i, "◉"],
+  [/indicator|add|ma\b|rsi|macd/i, "∿"],
+  [/panel|open/i, "▦"],
   [/chart/i, "◈"],
   [/read/i, "▤"],
   [/screen/i, "⋔"],
   [/compar/i, "⇌"],
   [/strateg|build/i, "◆"],
-  [/swap|trade/i, "◈"],
+  [/swap|trade|buy|sell|prepar/i, "◈"],
 ];
 function glyphFor(s: string) {
   for (const [re, g] of GLYPH) if (re.test(s)) return g;

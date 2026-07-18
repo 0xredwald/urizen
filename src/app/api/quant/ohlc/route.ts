@@ -10,6 +10,16 @@ export const revalidate = 0;
 type Candle = { t: number; o: number; h: number; l: number; c: number; v: number };
 
 const RANGES: Record<string, { range: string; interval: string }> = {
+  // intraday (smaller timeframes) — Yahoo caps 1m at 7d, so use 5m/15m
+  "1D": { range: "1d", interval: "5m" },
+  "5D": { range: "5d", interval: "15m" },
+  // daily and up
+  "1M": { range: "1mo", interval: "1d" },
+  "3M": { range: "3mo", interval: "1d" },
+  "6M": { range: "6mo", interval: "1d" },
+  "1Y": { range: "1y", interval: "1d" },
+  "5Y": { range: "5y", interval: "1wk" },
+  // legacy lowercase aliases (older agent output / clients)
   "1m": { range: "1mo", interval: "1d" },
   "3m": { range: "3mo", interval: "1d" },
   "6m": { range: "6mo", interval: "1d" },

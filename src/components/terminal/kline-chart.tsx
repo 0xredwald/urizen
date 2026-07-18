@@ -15,9 +15,12 @@ export type OverlayPoint = { timestamp: number; value: number };
 export type ChartHandle = {
   addIndicator: (name: string, sub?: boolean) => void;
   removeIndicators: () => void;
+  removeLastIndicator: () => boolean;
   createOverlay: (name: string, points: OverlayPoint[], extra?: Record<string, unknown>) => void;
   drawHLine: (price: number) => void;
   clearOverlays: () => void;
+  removeLastOverlay: () => boolean;
+  hasDrawings: () => boolean;
   /** (timestampMs, price) → viewport {x,y} for the agent cursor to trace. */
   coord: (timestampMs: number, price: number) => { x: number; y: number } | null;
   lastTimestamp: () => number | null;
@@ -60,8 +63,12 @@ const styles = {
 
 const toKLine = (c: Candle[]) => c.map((k) => ({ timestamp: k.t * 1000, open: k.o, high: k.h, low: k.l, close: k.c, volume: k.v }));
 
-export const KlineChart = forwardRef<ChartHandle, { candles: Candle[]; symbol: string; precision?: number }>(
-  function KlineChart({ candles, symbol, precision = 2 }, ref) {
+// smaller timeframes (1D/5D) are intraday → minute period so the x-axis shows time, not just dates
+const periodFor = (range?: string): { type: string; span: number } =>
+  range === "1D" ? { type: "minute", span: 5 } : range === "5D" ? { type: "minute", span: 15 } : { type: "day", span: 1 };
+
+export const KlineChart = forwardRef<ChartHandle, { candles: Candle[]; symbol: string; range?: string; precision?: number }>(
+  function KlineChart({ candles, symbol, range, precision = 2 }, ref) {
     const boxRef = useRef<HTMLDivElement>(null);
     const chartRef = useRef<Chart>(null);
     const overlayIds = useRef<string[]>([]);
@@ -83,7 +90,7 @@ export const KlineChart = forwardRef<ChartHandle, { candles: Candle[]; symbol: s
         chart = kc.init(boxRef.current, { styles });
         chartRef.current = chart;
         chart.setSymbol({ ticker: symbol, pricePrecision: precision, volumePrecision: 0 });
-        chart.setPeriod({ type: "day", span: 1 });
+        chart.setPeriod(periodFor(range));
         chart.setDataLoader({
           // static dataset from our API: hand back everything on init, nothing on paging
           getBars: (p: { type: string; callback: (d: unknown[], more?: boolean) => void }) => {
@@ -112,12 +119,13 @@ export const KlineChart = forwardRef<ChartHandle, { candles: Candle[]; symbol: s
       if (!chart) return;
       overlayIds.current = []; // drawings are per-instrument; clear on switch
       chart.setSymbol({ ticker: symbol, pricePrecision: precision, volumePrecision: 0 });
+      chart.setPeriod(periodFor(range));
       chart.setDataLoader({
         getBars: (p: { type: string; callback: (d: unknown[], more?: boolean) => void }) => {
           p.callback(p.type === "init" ? toKLine(dataRef.current) : [], false);
         },
       });
-    }, [candles, symbol, precision]);
+    }, [candles, symbol, range, precision]);
 
     useImperativeHandle(ref, (): ChartHandle => ({
       addIndicator: (name) => {
@@ -131,6 +139,12 @@ export const KlineChart = forwardRef<ChartHandle, { candles: Candle[]; symbol: s
         indicatorIds.current.forEach((id) => chartRef.current?.removeIndicator?.(id));
         indicatorIds.current = [];
       },
+      removeLastIndicator: () => {
+        const id = indicatorIds.current.pop();
+        if (!id) return false;
+        chartRef.current?.removeIndicator?.(id);
+        return true;
+      },
       createOverlay: (name, points, extra = {}) => {
         const id = chartRef.current?.createOverlay({ name, points, ...extra });
         if (typeof id === "string") overlayIds.current.push(id);
@@ -140,6 +154,13 @@ export const KlineChart = forwardRef<ChartHandle, { candles: Candle[]; symbol: s
         if (typeof id === "string") overlayIds.current.push(id);
       },
       clearOverlays: () => { chartRef.current?.removeOverlay?.(); overlayIds.current = []; },
+      removeLastOverlay: () => {
+        const id = overlayIds.current.pop();
+        if (!id) return false;
+        chartRef.current?.removeOverlay?.(id);
+        return true;
+      },
+      hasDrawings: () => overlayIds.current.length > 0,
       coord: (timestampMs, price) => {
         const c = chartRef.current?.convertToPixel({ timestamp: timestampMs, value: price });
         if (!c || c.x == null || c.y == null) return null;
