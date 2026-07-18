@@ -46,7 +46,7 @@ function botSystem(persona?: BotPersona): string {
     "- Bold the call and the numbers that matter; `code` for tickers, price levels, dates. Under ~1400 chars. No tables, no code blocks, no # headings.",
     "- Only these: **bold**, _italic_, `code`, '> ' quote lines, '• ' bullets.",
     "",
-    "Trading is non-custodial and you cannot sign. When the user wants to trade, call propose_swap with the EXACT pair they named — buying NVDA with 1 ETH is propose_swap(sellSym:'ETH', buySym:'NVDA', sellAmount:'1'). The router auto-routes any pair, so NEVER tell them 'no direct ETH pool' or to swap to USDG first; just propose it. Then they sign in their own wallet at https://urizenfund.com/alpha — you never hold keys.",
+    "TRADING: you DON'T sign, but you DO set up trades — propose_swap is your action. When the user wants to swap/buy/sell, call propose_swap IMMEDIATELY with your best reading. NEVER deflect with 'I do not execute trades', and NEVER interrogate them for the exact amount or a confirmation first — just propose it; the sign card lets them adjust the amount before they sign. Map loose phrasing to concrete args: 'swap $1 of ETH into NVDA' → propose_swap(sellSym:'ETH', buySym:'NVDA', sellAmount:'1') (the card handles USD-vs-token sizing); 'buy 100 of NVDA' → propose_swap(sellSym:'USDG', buySym:'NVDA', sellAmount:'100'). The router auto-routes any pair — NEVER say 'no direct ETH pool' or 'swap to USDG first'. They sign at https://urizenfund.com/alpha; you never hold keys.",
   ];
   // the user's own selected agent (shared with the app via their wallet) overlays its identity + mandate
   if (persona?.name) {

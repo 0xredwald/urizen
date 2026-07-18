@@ -466,7 +466,9 @@ export async function POST(req: Request) {
     const buy = text.startsWith("/buy"), sell = text.startsWith("/sell");
     const m = text.match(/^\/(?:swap|buy|sell)(?:@\w+)?\s+([\d.]+)\s+([A-Za-z]+)(?:\s+(?:->|to|for)?\s*([A-Za-z]+))?/i);
     if (!m) {
-      await send(chatId, "Set up a swap:\n<code>/swap 100 USDG NVDA</code> — amount, from, to\n<code>/buy 100 NVDA</code> · <code>/sell 5 NVDA</code> (vs USDG)");
+      // no amount given → open the visual swap card (pick tokens + amount, sign in your wallet)
+      await send(chatId, "◈ <b>Swap</b> — open the card, pick your tokens and amount, and sign in your wallet. Non-custodial.",
+        { reply_markup: { inline_keyboard: [[{ text: "↗ Open swap", url: `${APP}?swap=1` }]] } });
       return new Response("ok", { status: 200 });
     }
     const amount = m[1];

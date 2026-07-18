@@ -143,6 +143,7 @@ export function AlphaChat() {
     const q = new URLSearchParams(window.location.search);
     const sell = q.get("sell");
     if (sell) setTradeLink({ sell, buy: q.get("buy") || "NVDA", amount: q.get("amount") || "100" });
+    else if (q.get("swap") === "1") setTradeLink({ sell: "USDG", buy: "NVDA", amount: "100" }); // configurable swap modal
   }, []);
 
   // pin to bottom only when the user is already near it, and instantly (no smooth animation
