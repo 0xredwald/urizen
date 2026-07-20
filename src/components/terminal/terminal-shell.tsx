@@ -109,6 +109,17 @@ export function TerminalShell() {
     const maxH = (centerRef.current?.clientHeight ?? 800) - 160;
     return Math.round(Math.max(0, Math.min(Math.max(0, maxH), h - dy)));
   });
+  // the three rails are user-resizable too — drag the vertical splitters. Left + right widths are
+  // stored (px); the centre column takes the rest. Persisted.
+  const [leftW, setLeftW] = useState(272);
+  const [rightW, setRightW] = useState(430);
+  useEffect(() => { try { const l = localStorage.getItem("urizen.terminal.leftW"); const r = localStorage.getItem("urizen.terminal.rightW"); if (l) setLeftW(Math.max(180, Math.min(460, parseInt(l, 10) || 272))); if (r) setRightW(Math.max(320, Math.min(680, parseInt(r, 10) || 430))); } catch { /* noop */ } }, []);
+  useEffect(() => { try { localStorage.setItem("urizen.terminal.leftW", String(leftW)); localStorage.setItem("urizen.terminal.rightW", String(rightW)); } catch { /* noop */ } }, [leftW, rightW]);
+  const resizeLeft = (dx: number) => setLeftW((w) => Math.round(Math.max(180, Math.min(460, w + dx))));
+  const resizeRight = (dx: number) => setRightW((w) => Math.round(Math.max(320, Math.min(680, w - dx))));
+  // the agent is "drawing" only while it executes chart-drawing actions — we dim the surroundings then,
+  // NOT during plain thinking/streaming (that was too aggressive). Set inside dispatch.
+  const [drawing, setDrawing] = useState(false);
   const [messages, setMessages] = useState<HMsg[]>([]);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
@@ -195,11 +206,17 @@ export function TerminalShell() {
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
   // execute the agent's actions on the terminal, moving the visible cursor as it goes
+  // which actions actually paint on the chart — only these trigger the "dim the surroundings" focus mode
+  const DRAW_TOOLS = new Set(["drawTrendline", "drawZone", "drawHLine", "marker", "addIndicator", "clearDrawings", "clearIndicators"]);
   const dispatch = async (actions: HAction[]) => {
     const cur = cursorOn ? cursorRef.current : null;
-    // guard against a misbehaving model: cap the run and drop duplicate actions (the "spam" bug)
+    // guard against a misbehaving model: cap the run and drop duplicate actions (the "spam" bug).
+    // cap is generous so a "draw everything" request (trendlines + zones + levels + markers) fits.
     const seen = new Set<string>();
-    const list = (actions || []).slice(0, 8).filter((a) => { const k = JSON.stringify(a); if (seen.has(k)) return false; seen.add(k); return true; });
+    const list = (actions || []).slice(0, 16).filter((a) => { const k = JSON.stringify(a); if (seen.has(k)) return false; seen.add(k); return true; });
+    // dim the rest of the terminal only while the agent is drawing on the chart (not while it just talks)
+    const willDraw = list.some((a) => DRAW_TOOLS.has(a.tool));
+    if (willDraw) setDrawing(true);
     for (const a of list) {
       const chart = activeHandle();
       try {
@@ -220,6 +237,15 @@ export function TerminalShell() {
           const t = chart?.coord(a.to.t * 1000, a.to.price);
           if (cur && f) { cur.show(a.label || "trend"); await cur.moveTo(f.x, f.y); await cur.press(); }
           chart?.createOverlay("segment", [{ timestamp: a.from.t * 1000, value: a.from.price }, { timestamp: a.to.t * 1000, value: a.to.price }]);
+          if (cur && t) await cur.moveTo(t.x, t.y, true);
+          await wait(450);
+        } else if (a.tool === "drawZone") {
+          // a rectangle box (fair-value gap / supply-demand zone) between two opposite corners
+          setStatus(`drawing ${a.label || "zone"}`);
+          const f = chart?.coord(a.from.t * 1000, a.from.price);
+          const t = chart?.coord(a.to.t * 1000, a.to.price);
+          if (cur && f) { cur.show(a.label || "zone"); await cur.moveTo(f.x, f.y); await cur.press(); }
+          chart?.createOverlay("rect", [{ timestamp: a.from.t * 1000, value: a.from.price }, { timestamp: a.to.t * 1000, value: a.to.price }]);
           if (cur && t) await cur.moveTo(t.x, t.y, true);
           await wait(450);
         } else if (a.tool === "marker") {
@@ -244,6 +270,7 @@ export function TerminalShell() {
       } catch { /* one bad action shouldn't kill the sequence */ }
     }
     cur?.hide();
+    setDrawing(false);
   };
 
   const ask = async (text: string) => {
@@ -292,11 +319,17 @@ export function TerminalShell() {
         onStatus: (s) => setStatus(s),
         onText: (visible) => { if (visible) patchLast(visible); },
       });
-      patchLast(reply.say || "…");
+      // never leave a bare "…" bubble — if the model returned no prose but DID act, describe the action;
+      // if it returned nothing usable, say so instead of a lonely ellipsis
+      const said = (reply.say || "").trim();
+      const clean = said && said !== "…" ? said
+        : reply.actions.length ? `on it — marking up ${selected} on the chart.`
+        : "didn't catch that — try rephrasing?";
+      patchLast(clean);
       await dispatch(reply.actions);
     } catch (e) {
       patchLast(`hit a snag — ${(e as Error)?.message || "try again"}`);
-    } finally { setBusy(false); setStatus(""); cursorRef.current?.hide(); }
+    } finally { setBusy(false); setStatus(""); cursorRef.current?.hide(); setDrawing(false); }
   };
 
   // price map for the portfolio (quotes cover movers; the active symbol adds its live price)
@@ -386,14 +419,14 @@ export function TerminalShell() {
       </header>
 
       {/* ── the live tape — always scrolling, always flashing, 24/7 on-chain (dims while agent draws) ── */}
-      <div className={`relative z-10 h-7 shrink-0 overflow-hidden border-b border-border bg-[#0a0a0b]/70 transition-opacity duration-500 ${busy ? "opacity-25" : ""}`}>
+      <div className={`relative z-10 h-7 shrink-0 overflow-hidden border-b border-border bg-[#0a0a0b]/70 transition-opacity duration-500 ${drawing ? "opacity-25" : ""}`}>
         <LiveTape quotes={quotes} indices={indices} />
       </div>
 
       {/* ── body: three rails ── */}
-      <div className="relative z-10 grid min-h-0 flex-1 gap-2 p-2" style={{ gridTemplateColumns: "minmax(250px,280px) minmax(0,1fr) minmax(400px,460px)" }}>
+      <div className="relative z-10 grid min-h-0 flex-1 p-2" style={{ gridTemplateColumns: `${leftW}px 8px minmax(0,1fr) 8px ${rightW}px` }}>
         {/* LEFT: swap on top, then markets + a compact portfolio (dims while the agent draws) */}
-        <div className={`grid min-h-0 grid-rows-[auto_minmax(0,1.5fr)_minmax(0,0.8fr)] gap-2 transition-opacity duration-500 ${busy ? "opacity-25" : ""}`}>
+        <div className={`grid min-h-0 grid-rows-[auto_minmax(0,1.5fr)_minmax(0,0.8fr)] gap-2 transition-opacity duration-500 ${drawing ? "opacity-25" : ""}`}>
           <Pane n={1} title="Swap · Trade" className="ring-1 ring-signal/25 shadow-[0_14px_34px_-22px_rgba(52,240,3,0.45)]">
             <SwapTicket defaultBuy={selected} />
           </Pane>
@@ -419,10 +452,13 @@ export function TerminalShell() {
           </Pane>
         </div>
 
+        {/* drag to resize the left rail */}
+        <VSplitter onDrag={resizeLeft} />
+
         {/* CENTER: the chart (its 44px header carries instrument, price, tools) + a resizable news + odds
             strip below — drag the splitter to size the chart */}
         <div ref={centerRef} className="grid min-h-0 gap-1.5" style={{ gridTemplateRows: `minmax(0,1fr) 8px ${bottomH}px` }}>
-        <section className={`flex min-h-0 flex-col overflow-hidden border bg-[#0b0b0d]/62 backdrop-blur-md transition-all duration-500 ${busy ? "border-signal/40 shadow-[0_0_40px_-8px_rgba(52,240,3,0.35)]" : "border-border"}`}>
+        <section className={`flex min-h-0 flex-col overflow-hidden border bg-[#0b0b0d]/62 backdrop-blur-md transition-all duration-500 ${drawing ? "border-signal/40 shadow-[0_0_40px_-8px_rgba(52,240,3,0.35)]" : "border-border"}`}>
           <header className="flex h-11 shrink-0 items-center gap-3 border-b border-border pl-3 pr-2">
             <div className="flex shrink-0 items-center gap-2.5">
               <Logo s={selected} size={22} />
@@ -456,7 +492,7 @@ export function TerminalShell() {
           </div>
         </section>
         <ChartSplitter onDrag={resizeChart} />
-        <div className={`grid min-h-0 grid-cols-[1fr_minmax(300px,340px)] gap-2 transition-opacity duration-500 ${busy ? "opacity-25" : ""}`}>
+        <div className={`grid min-h-0 grid-cols-[1fr_minmax(300px,340px)] gap-2 transition-opacity duration-500 ${drawing ? "opacity-25" : ""}`}>
           <Pane n={5} title={`News · ${selected}`} right={<button onClick={() => openPanel("news")} className="font-mono text-[0.56rem] uppercase tracking-widest text-muted-foreground transition-colors hover:text-signal">expand ↗</button>}>
             <NewsPanel symbol={selected} />
           </Pane>
@@ -465,6 +501,9 @@ export function TerminalShell() {
           </Pane>
         </div>
         </div>
+
+        {/* drag to resize the agent rail */}
+        <VSplitter onDrag={resizeRight} />
 
         {/* RIGHT: the terminal agent — full height */}
         <HorizonRail selected={selected} messages={messages} busy={busy} status={status} onAsk={ask}
@@ -506,6 +545,21 @@ function ChartSplitter({ onDrag }: { onDrag: (dy: number) => void }) {
     <div onPointerDown={down} onPointerMove={move} onPointerUp={up} title="drag to resize the chart"
       className="group relative flex cursor-row-resize touch-none items-center justify-center">
       <div className="h-[3px] w-16 rounded-full bg-border transition-colors group-hover:bg-signal/50" />
+    </div>
+  );
+}
+
+// vertical drag handle between two rails — drag left/right to resize the neighbouring column.
+// Reports the horizontal delta (dx); the shell clamps + persists the new width.
+function VSplitter({ onDrag }: { onDrag: (dx: number) => void }) {
+  const lastX = useRef<number | null>(null);
+  const down = (e: React.PointerEvent) => { lastX.current = e.clientX; try { (e.currentTarget as Element).setPointerCapture(e.pointerId); } catch { /* */ } };
+  const move = (e: React.PointerEvent) => { if (lastX.current == null) return; const dx = e.clientX - lastX.current; lastX.current = e.clientX; if (dx) onDrag(dx); };
+  const up = (e: React.PointerEvent) => { lastX.current = null; try { (e.currentTarget as Element).releasePointerCapture(e.pointerId); } catch { /* */ } };
+  return (
+    <div onPointerDown={down} onPointerMove={move} onPointerUp={up} title="drag to resize"
+      className="group relative flex cursor-col-resize touch-none items-center justify-center">
+      <div className="h-16 w-[3px] rounded-full bg-border transition-colors group-hover:bg-signal/50" />
     </div>
   );
 }

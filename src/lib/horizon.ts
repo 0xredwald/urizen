@@ -14,6 +14,7 @@ export type HAction =
   | { tool: "addIndicator"; name: "MA" | "EMA" | "BOLL" | "RSI" | "MACD" | "KDJ" | "VOL" }
   | { tool: "clearIndicators" }
   | { tool: "drawTrendline"; from: { t: number; price: number }; to: { t: number; price: number }; label?: string }
+  | { tool: "drawZone"; from: { t: number; price: number }; to: { t: number; price: number }; label?: string }
   | { tool: "drawHLine"; price: number; label?: string }
   | { tool: "marker"; t: number; price: number; text: string }
   | { tool: "clearDrawings" }
@@ -45,7 +46,8 @@ function systemPrompt(ctx: HorizonCtx): string {
     `${persona} You don't just talk — you OPERATE a Bloomberg-style trading terminal through tools, and the user watches your cursor draw.`,
     "Reason over the REAL candles and indicators given. NEVER invent prices, timestamps, or stats. This is not investment advice.",
     "",
-    "FORMAT — reply in natural prose: a crisp 1-3 sentence read (lowercase-ok). This STREAMS live to the user, so write it first.",
+    "FORMAT — reply with a SHORT read: 1-2 sentences MAX (lowercase-ok). Do NOT write a long essay — the detailed analysis belongs in the DRAWINGS on the chart, not the prose. This STREAMS live, so write the short line first, then the actions.",
+    "When the user asks you to 'draw everything' / do a 'full analysis', that means EMIT LOTS OF ACTIONS (trendlines, levels, zones, markers) — keep the prose tiny and let the chart do the talking.",
     "If (and only if) you need to act on the terminal, AFTER your prose append a fenced block, exactly:",
     "```actions",
     `[{"tool":"drawTrendline","from":{"t":<unix_sec>,"price":<n>},"to":{"t":<unix_sec>,"price":<n>},"label":"uptrend"}]`,
@@ -56,13 +58,14 @@ function systemPrompt(ctx: HorizonCtx): string {
     `{"tool":"selectSymbol","symbol":"TSLA"} (retarget the active chart) · {"tool":"openChart","symbol":"TSLA"} (open a NEW chart, up to 4 — a playground) · {"tool":"setTimeframe","range":"1m|5m|15m|1h|1D|1W"} (candle interval; data is live 24/7 on-chain)`,
     `{"tool":"addIndicator","name":"MA|EMA|BOLL|RSI|MACD|KDJ|VOL"} · {"tool":"clearIndicators"}`,
     `{"tool":"drawTrendline","from":{"t":<unix_sec>,"price":<n>},"to":{"t":<unix_sec>,"price":<n>},"label":"uptrend"}`,
+    `{"tool":"drawZone","from":{"t":<unix_sec>,"price":<n>},"to":{"t":<unix_sec>,"price":<n>},"label":"bullish FVG"} (a rectangle box between two opposite corners — use for fair-value gaps and supply/demand zones)`,
     `{"tool":"drawHLine","price":<n>,"label":"support"} · {"tool":"marker","t":<unix_sec>,"price":<n>,"text":"breakout"}`,
     `{"tool":"clearDrawings"} · {"tool":"checkNews","symbol":"NVDA"} · {"tool":"proposeTrade","side":"buy|sell","symbol":"NVDA","amount":<usd>}`,
     `{"tool":"openPanel","panel":"news|gainers|losers|ratings|fundamentals|macro|predictions|onchain|calendar|heatmap|perps"} (add a panel to the board) · {"tool":"closePanel","panel":"…"}`,
     "",
     "RULES:",
     "- You can SEE the user's on-chain PORTFOLIO and open WORKSPACE below. Use them: answer holdings questions from the real numbers, size proposeTrade against what they actually hold (e.g. 'trim NVDA' = sell part of their NVDA balance), and never invent positions they don't have.",
-    "- For drawTrendline/marker, `t` MUST be a timestamp that appears in the CANDLES below, and `price` a real level from the data (a swing high/low, a close). Connect two real pivots for a trendline.",
+    "- For drawTrendline/drawZone/marker, `t` MUST be a timestamp that appears in the CANDLES below, and `price` a real level from the data (a swing high/low, a close). Connect two real pivots for a trendline; for a zone/FVG use the gap's two opposite corners (earlier candle's edge → later candle's edge).",
     "- For drawHLine (support/resistance), use a real level from recent highs/lows.",
     "- Sequence sensibly: selectSymbol / setTimeframe first if needed, then indicators, then drawings.",
     "- Only proposeTrade when the user clearly wants to act. Keep actions to what the request needs (1-5).",
@@ -155,21 +158,21 @@ export async function runHorizon(userText: string, ctx: HorizonCtx, history: HMs
   if (binding.free || !binding.key) {
     const res = await fetch("/api/alpha/free", {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: binding.model || FREE_MODEL, max_tokens: 1200, stream: true, messages: [{ role: "system", content: system }, ...prior, { role: "user", content: user }] }),
+      body: JSON.stringify({ model: binding.model || FREE_MODEL, max_tokens: 3000, stream: true, messages: [{ role: "system", content: system }, ...prior, { role: "user", content: user }] }),
     });
     if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e?.error || `free mode ${res.status}`); }
     await streamSSE(res, onDelta);
   } else if (binding.provider === "anthropic") {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST", headers: { "content-type": "application/json", "x-api-key": binding.key.trim(), "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
-      body: JSON.stringify({ model: binding.model || MODEL_FALLBACK.anthropic, max_tokens: 1200, stream: true, system, messages: [...prior, { role: "user", content: user }] }),
+      body: JSON.stringify({ model: binding.model || MODEL_FALLBACK.anthropic, max_tokens: 3000, stream: true, system, messages: [...prior, { role: "user", content: user }] }),
     });
     if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e?.error?.message || `anthropic ${res.status}`); }
     await streamSSE(res, onDelta);
   } else {
     const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${binding.key.trim()}`, "http-referer": "https://urizenfund.com", "x-title": "URIZEN Terminal · Agent" },
-      body: JSON.stringify({ model: binding.model || MODEL_FALLBACK.openrouter, max_tokens: 1200, stream: true, messages: [{ role: "system", content: system }, ...prior, { role: "user", content: user }] }),
+      body: JSON.stringify({ model: binding.model || MODEL_FALLBACK.openrouter, max_tokens: 3000, stream: true, messages: [{ role: "system", content: system }, ...prior, { role: "user", content: user }] }),
     });
     if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e?.error?.message || `openrouter ${res.status}`); }
     await streamSSE(res, onDelta);
