@@ -97,6 +97,18 @@ export function TerminalShell() {
   const [cursorOn, setCursorOn] = useState(true);
   useEffect(() => { try { const v = localStorage.getItem("urizen.terminal.cursor"); if (v != null) setCursorOn(v === "1"); } catch { /* noop */ } }, []);
   useEffect(() => { try { localStorage.setItem("urizen.terminal.cursor", cursorOn ? "1" : "0"); } catch { /* noop */ } }, [cursorOn]);
+  // the chart pane is user-resizable — drag the splitter above the news/odds strip. This number is the
+  // height of that bottom strip; the chart takes whatever's left, so a shorter strip = a taller chart.
+  // Persisted so the size sticks between sessions.
+  const [bottomH, setBottomH] = useState(188);
+  const centerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { try { const v = localStorage.getItem("urizen.terminal.bottomH"); if (v != null) { const n = parseInt(v, 10); if (Number.isFinite(n)) setBottomH(n); } } catch { /* noop */ } }, []);
+  useEffect(() => { try { localStorage.setItem("urizen.terminal.bottomH", String(bottomH)); } catch { /* noop */ } }, [bottomH]);
+  // dragging the splitter DOWN grows the chart (bottom strip shrinks); always leave room for the chart
+  const resizeChart = (dy: number) => setBottomH((h) => {
+    const maxH = (centerRef.current?.clientHeight ?? 800) - 160;
+    return Math.round(Math.max(0, Math.min(Math.max(0, maxH), h - dy)));
+  });
   const [messages, setMessages] = useState<HMsg[]>([]);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
@@ -407,8 +419,9 @@ export function TerminalShell() {
           </Pane>
         </div>
 
-        {/* CENTER: the chart (its 44px header carries instrument, price, tools) + a news + odds strip below */}
-        <div className="grid min-h-0 grid-rows-[1fr_188px] gap-2">
+        {/* CENTER: the chart (its 44px header carries instrument, price, tools) + a resizable news + odds
+            strip below — drag the splitter to size the chart */}
+        <div ref={centerRef} className="grid min-h-0 gap-1.5" style={{ gridTemplateRows: `minmax(0,1fr) 8px ${bottomH}px` }}>
         <section className={`flex min-h-0 flex-col overflow-hidden border bg-[#0b0b0d]/62 backdrop-blur-md transition-all duration-500 ${busy ? "border-signal/40 shadow-[0_0_40px_-8px_rgba(52,240,3,0.35)]" : "border-border"}`}>
           <header className="flex h-11 shrink-0 items-center gap-3 border-b border-border pl-3 pr-2">
             <div className="flex shrink-0 items-center gap-2.5">
@@ -442,6 +455,7 @@ export function TerminalShell() {
             <ChartWorkspace charts={charts} activeId={activeId} interval={tf} onFocus={setActiveId} onClose={closeChart} onHandle={(id, h) => { handlesRef.current[id] = h; }} />
           </div>
         </section>
+        <ChartSplitter onDrag={resizeChart} />
         <div className={`grid min-h-0 grid-cols-[1fr_minmax(300px,340px)] gap-2 transition-opacity duration-500 ${busy ? "opacity-25" : ""}`}>
           <Pane n={5} title={`News · ${selected}`} right={<button onClick={() => openPanel("news")} className="font-mono text-[0.56rem] uppercase tracking-widest text-muted-foreground transition-colors hover:text-signal">expand ↗</button>}>
             <NewsPanel symbol={selected} />
@@ -479,6 +493,21 @@ export function TerminalShell() {
 
 function Empty({ children }: { children: React.ReactNode }) {
   return <div className="grid h-full place-items-center font-mono text-[0.7rem] uppercase tracking-widest text-muted-foreground/50">{children}</div>;
+}
+
+// the drag handle between the chart and the news/odds strip — drag up/down to resize the chart pane.
+// Reports the pointer delta (dy) each move; the shell clamps and persists the new size.
+function ChartSplitter({ onDrag }: { onDrag: (dy: number) => void }) {
+  const lastY = useRef<number | null>(null);
+  const down = (e: React.PointerEvent) => { lastY.current = e.clientY; try { (e.currentTarget as Element).setPointerCapture(e.pointerId); } catch { /* */ } };
+  const move = (e: React.PointerEvent) => { if (lastY.current == null) return; const dy = e.clientY - lastY.current; lastY.current = e.clientY; if (dy) onDrag(dy); };
+  const up = (e: React.PointerEvent) => { lastY.current = null; try { (e.currentTarget as Element).releasePointerCapture(e.pointerId); } catch { /* */ } };
+  return (
+    <div onPointerDown={down} onPointerMove={move} onPointerUp={up} title="drag to resize the chart"
+      className="group relative flex cursor-row-resize touch-none items-center justify-center">
+      <div className="h-[3px] w-16 rounded-full bg-border transition-colors group-hover:bg-signal/50" />
+    </div>
+  );
 }
 
 // ── the ONE big board — a dimmed-backdrop pop-up holding MULTIPLE panel tiles. Add as many as you
