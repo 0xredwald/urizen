@@ -32,6 +32,29 @@ async function handle(req: Request) {
     groupKey_TELEGRAM_OPENROUTER_KEY: await keyHealth(process.env.TELEGRAM_OPENROUTER_KEY),
     fallback_URIZEN_FREE_OPENROUTER_KEY: await keyHealth(process.env.URIZEN_FREE_OPENROUTER_KEY),
   };
+  // live CDP facilitator auth check — mint a JWT + hit /verify with a dummy payload. 401/403 = auth
+  // broken; 400/422 = auth OK (payload rejected, expected). Confirms settlement will work, no payment.
+  let cdpAuth = "no CDP keys set";
+  if (process.env.CDP_API_KEY_ID && process.env.CDP_API_KEY_SECRET) {
+    try {
+      const { generateJwt } = await import("@coinbase/cdp-sdk/auth");
+      const fUrl = process.env.X402_FACILITATOR || "https://api.cdp.coinbase.com/platform/v2/x402";
+      const u = new URL(`${fUrl}/verify`);
+      const jwt = await generateJwt({ apiKeyId: process.env.CDP_API_KEY_ID, apiKeySecret: process.env.CDP_API_KEY_SECRET, requestMethod: "POST", requestHost: u.host, requestPath: u.pathname, expiresIn: 120 });
+      const r = await fetch(u, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${jwt}` }, body: JSON.stringify({ x402Version: 1, paymentPayload: {}, paymentRequirements: {} }) });
+      cdpAuth = r.status === 401 || r.status === 403 ? `AUTH FAILED (${r.status})` : `auth OK — facilitator returned ${r.status} (payload rejected, as expected)`;
+    } catch (e) { cdpAuth = `error: ${String(e).slice(0, 90)}`; }
+  }
+  // x402 readiness (never exposes any value — just set/valid)
+  const x402 = {
+    X402_PAY_TO: process.env.X402_PAY_TO ? `set (…${process.env.X402_PAY_TO.slice(-4)})` : "UNSET",
+    X402_OPENROUTER_KEY: await keyHealth(process.env.X402_OPENROUTER_KEY),
+    X402_MODEL: process.env.X402_MODEL || "default (openai/gpt-oss-20b:free)",
+    CDP_API_KEY_ID: process.env.CDP_API_KEY_ID ? "set" : "UNSET",
+    CDP_API_KEY_SECRET: process.env.CDP_API_KEY_SECRET ? "set" : "UNSET",
+    CDP_facilitator_auth: cdpAuth,
+    X402_NETWORK: process.env.X402_NETWORK || "base",
+  };
   // actually run the group's model with the house key — proves the group chat path end to end
   const houseKey = process.env.TELEGRAM_OPENROUTER_KEY || process.env.URIZEN_FREE_OPENROUTER_KEY;
   const model = process.env.URIZEN_BOT_MODEL || "openai/gpt-oss-120b";
@@ -62,6 +85,7 @@ async function handle(req: Request) {
     webhookLastError: webhook?.result?.last_error_message || null,
     modelKeys,
     groupModelTest,
+    x402,
     channelIdConfigured: chat || null,
     channel: (channelInfo as { result?: { title?: string } })?.result?.title ?? channelInfo,
     botStatusInChannel: (botInChannel as { result?: { status?: string; can_post_messages?: boolean } })?.result

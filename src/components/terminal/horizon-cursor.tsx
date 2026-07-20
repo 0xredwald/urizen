@@ -19,7 +19,7 @@ export const HorizonCursor = forwardRef<CursorHandle>(function HorizonCursor(_pr
   const x = useMotionValue(-200);
   const y = useMotionValue(-200);
   const [visible, setVisible] = useState(false);
-  const [label, setLabel] = useState("Agent");
+  const [label, setLabel] = useState("Urizen");
   const [ripples, setRipples] = useState<{ id: number; x: number; y: number }[]>([]);
   const rid = useRef(0);
 

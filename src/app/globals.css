@@ -485,3 +485,15 @@
 @keyframes skillIn { from { opacity: 0; transform: translateY(14px); filter: blur(6px); } to { opacity: 1; transform: none; filter: blur(0); } }
 .skill-in { animation: skillIn 0.9s cubic-bezier(0.16, 0.8, 0.3, 1) both; }
 @media (prefers-reduced-motion: reduce) { .skill-in { animation: none; } }
+
+/* Terminal live tape — the always-scrolling, always-flashing ticker across the desk */
+@keyframes tape-scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+.tape-track { animation: tape-scroll 60s linear infinite; will-change: transform; }
+.tape-track:hover { animation-play-state: paused; }
+@keyframes tape-flash-up { 0% { background-color: rgba(52, 240, 3, 0.4); box-shadow: inset 0 0 0 1px rgba(52, 240, 3, 0.5); } 100% { background-color: transparent; box-shadow: none; } }
+@keyframes tape-flash-down { 0% { background-color: rgba(255, 90, 90, 0.4); box-shadow: inset 0 0 0 1px rgba(255, 90, 90, 0.5); } 100% { background-color: transparent; box-shadow: none; } }
+.tape-flash-up { animation: tape-flash-up 0.9s ease-out; }
+.tape-flash-down { animation: tape-flash-down 0.9s ease-out; }
+@keyframes live-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+.live-blink { animation: live-blink 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .tape-track { animation: none; } .tape-flash-up, .tape-flash-down { animation: none; } .live-blink { animation: none; } }

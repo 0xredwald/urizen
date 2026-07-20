@@ -21,25 +21,26 @@ const SITE = "https://urizenfund.com";
 export const metadata: Metadata = {
   metadataBase: new URL(SITE),
   title: {
-    default: "URIZEN · The first autonomous fund on Robinhood Chain",
+    default: "URIZEN · The AI-powered terminal for onchain RWAs",
     template: "%s · URIZEN",
   },
   description:
-    "Robinhood brought investing onchain. Urizen is the next step, the first autonomous fund on Robinhood Chain. A tokenized fund that allocates across stocks, real-world assets and crypto, 24/7, with one objective: maximize long-term returns.",
+    "TradFi has Bloomberg, now crypto has Urizen. An AI-powered terminal for onchain real-world assets — 24/7 charts for tokenized stocks and ETFs, one-tap swaps, live prediction-market odds, and an agent that trades alongside you. $URI unlocks the desk.",
   keywords: [
     "URIZEN",
-    "autonomous fund",
-    "Robinhood Chain",
-    "tokenized fund",
+    "onchain terminal",
+    "RWA terminal",
     "tokenized stocks",
     "real-world assets",
-    "onchain investing",
-    "onchain fund",
+    "AI trading terminal",
+    "Robinhood Chain",
+    "onchain Bloomberg",
+    "$URI",
   ],
   openGraph: {
-    title: "URIZEN · The first autonomous fund on Robinhood Chain",
+    title: "URIZEN · The AI-powered terminal for onchain RWAs",
     description:
-      "A tokenized fund on Robinhood Chain that allocates across stocks, RWAs and crypto, 24/7, fully onchain and verifiable.",
+      "TradFi has Bloomberg, now crypto has Urizen. An AI-powered terminal for onchain RWAs — 24/7 charts, on-chain swaps, prediction-market odds, and an agent that trades alongside you.",
     url: SITE,
     siteName: "URIZEN",
     type: "website",
@@ -48,8 +49,8 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     site: "@urizenfund",
     creator: "@urizenfund",
-    title: "URIZEN · The first autonomous fund on Robinhood Chain",
-    description: "Autonomous investing. A tokenized fund across stocks, RWAs and crypto.",
+    title: "URIZEN · The AI-powered terminal for onchain RWAs",
+    description: "TradFi has Bloomberg, now crypto has Urizen. The AI-powered terminal for onchain real-world assets.",
   },
   icons: { icon: "/icon.png" },
 };

@@ -54,7 +54,7 @@ export function TradeTicket({ trade, taker, onClose }: { trade: ProposedTrade; t
   return (
     <div className="rounded-xl border border-signal/30 bg-signal/[0.05] p-3">
       <div className="flex items-center justify-between">
-        <span className="font-mono text-[0.62rem] uppercase tracking-widest text-signal">⚑ Horizon proposes a trade</span>
+        <span className="font-mono text-[0.62rem] uppercase tracking-widest text-signal">⚑ Urizen proposes a trade</span>
         {!txHash && <button onClick={onClose} className="font-mono text-[0.7rem] text-muted-foreground hover:text-foreground">✕</button>}
       </div>
       <div className="mt-2 flex items-baseline gap-2">

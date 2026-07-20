@@ -24,6 +24,20 @@ export function UrizenMark({
   );
 }
 
+/** The Bloomberg brand name, set as a wordmark — used ONLY comparatively ("TradFi has Bloomberg,
+ *  now crypto has Urizen"). Mixed-case bold sans so it reads as the wordmark next to our display type. */
+export function BloombergMark({ className }: { className?: string }) {
+  return (
+    <span
+      aria-label="Bloomberg"
+      className={cn("inline-block whitespace-nowrap font-extrabold normal-case leading-none tracking-[-0.025em] text-white", className)}
+      style={{ fontFamily: '"Helvetica Neue", Helvetica, Arial, sans-serif' }}
+    >
+      Bloomberg
+    </span>
+  );
+}
+
 /** The actual CTRL mark — eye/orbit with the inner four-point star. Monochrome
  *  (currentColor), so it takes whatever color you give it. */
 export function CtrlOrbit({ className }: { className?: string }) {

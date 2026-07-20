@@ -103,25 +103,36 @@ export const KlineChart = forwardRef<ChartHandle, { symbol: string; interval: st
       getBars: async (p: { type: string; callback: (d: unknown[], more?: boolean) => void }) => {
         if (p.type === "init") {
           const c = await fetchOhlc(sym.current, itv.current);
-          p.callback(toKLine(c), c.length > 0); // allow backward paging
+          // more=false: ~500 bars is plenty for the view. This was `c.length > 0`, which told KLineChart
+          // history was always available → it paged backward forever, re-loading the same boundary
+          // window over and over (the "looping" chart). No auto-paging now.
+          p.callback(toKLine(c), false);
         } else if (p.type === "backward") {
-          // page older history before the earliest candle currently held
+          // one page of genuinely-older bars on demand, then stop (never advertise infinite history)
           const list = chartRef.current?.getDataList?.() ?? [];
           const earliest = list.length ? Math.floor(list[0].timestamp / 1000) : undefined;
           const c = await fetchOhlc(sym.current, itv.current, earliest);
-          p.callback(toKLine(c), c.length > 0);
+          const older = earliest ? c.filter((k) => k.t < earliest) : c;
+          p.callback(toKLine(older), false);
         } else {
           p.callback([], false);
         }
       },
-      // live: poll the newest candle and feed it in (updates the last bar or appends a new one)
+      // live: poll the newest candle and feed it in — but ONLY when it actually changed. Thin RH pools
+      // often don't trade for a while, so the fetch keeps returning the identical last candle; feeding
+      // it every tick made the chart redraw the same bar on a loop. De-duping stops that flicker.
       subscribeBar: (p: { callback: (d: unknown) => void }) => {
         if (pollRef.current) clearInterval(pollRef.current);
+        let lastKey = "";
         pollRef.current = setInterval(async () => {
           const c = await fetchOhlc(sym.current, itv.current);
           const last = c[c.length - 1];
-          if (last) p.callback(toKLine([last])[0]);
-        }, 12000);
+          if (!last) return;
+          const key = `${last.t}:${last.o}:${last.h}:${last.l}:${last.c}`;
+          if (key === lastKey) return; // unchanged → don't touch the chart
+          lastKey = key;
+          p.callback(toKLine([last])[0]);
+        }, 15000);
       },
       unsubscribeBar: () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } },
     });
@@ -140,7 +151,8 @@ export const KlineChart = forwardRef<ChartHandle, { symbol: string; interval: st
         chart.setSymbol({ ticker: sym.current, pricePrecision: precision, volumePrecision: 0 });
         chart.setPeriod(periodFor(itv.current));
         chart.setDataLoader(makeLoader());
-        indicatorIds.current = [chart.createIndicator("VOL", false)].filter(Boolean);
+        // vanilla by default — just candles. Indicators (VOL/MA/RSI…) are added on demand,
+        // by the user (∿ menu) or the agent (addIndicator). No sub-pane clutter on load.
         const ro = new ResizeObserver(() => chart?.resize());
         ro.observe(boxRef.current);
         chart.__ro = ro;
@@ -208,7 +220,12 @@ export const KlineChart = forwardRef<ChartHandle, { symbol: string; interval: st
         const c = chartRef.current?.convertToPixel({ timestamp: timestampMs, value: price });
         if (!c || c.x == null || c.y == null) return null;
         const r = boxRef.current?.getBoundingClientRect();
-        return r ? { x: r.left + c.x, y: r.top + c.y } : null;
+        if (!r) return null;
+        // clamp inside the chart so the agent cursor is always ON the chart, even if the point it
+        // references is just outside the visible window
+        const x = Math.max(r.left + 8, Math.min(r.right - 8, r.left + c.x));
+        const y = Math.max(r.top + 8, Math.min(r.bottom - 8, r.top + c.y));
+        return { x, y };
       },
       lastTimestamp: () => { const d = chartRef.current?.getDataList?.() ?? []; return d.length ? d[d.length - 1].timestamp : null; },
     }), []);

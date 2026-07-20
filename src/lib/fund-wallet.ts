@@ -124,16 +124,26 @@ export async function getFundTrades(wallet = FUND_WALLET, limit = 20): Promise<F
     const touchesLp = legs.some((l) => LP_SET.has(l.cp));
     const allFund = legs.every((l) => FUND_WALLET_SET.has(l.cp));
 
+    // Classify by the token flow, robust to Uniswap v4 (where swaps AND liquidity both settle through
+    // the PoolManager, and a leg can be native ETH that never appears as an ERC-20 transfer):
+    //   • swap      — gave one token, got a DIFFERENT one back (in the same tx)
+    //   • lp-add    — deposited BOTH pair tokens to the pool, nothing back (receipt is an NFT)
+    //   • lp-remove — withdrew BOTH pair tokens from the pool
+    //   • buy/sell  — a single token in / out (incl. a swap where the other leg was native ETH)
+    // Requiring TWO distinct tokens for an LP move is what stops a single-token swap being mislabeled
+    // as "pulled/added liquidity" (0xmontblanc's report).
+    const outSyms = new Set(outs.map((l) => l.symbol));
+    const inSyms = new Set(ins.map((l) => l.symbol));
+    const acquired = ins.filter((l) => !outSyms.has(l.symbol));
+    const isSwap = outs.length > 0 && acquired.length > 0;
+    const isLpAdd = touchesLp && ins.length === 0 && outSyms.size >= 2;
+    const isLpRemove = touchesLp && outs.length === 0 && inSyms.size >= 2;
+
     let kind: FundTradeKind, prim: Leg, sec: Leg | undefined;
     if (allFund) { kind = "move"; prim = biggest(legs); }
-    else if (touchesLp) {
-      const lpOut = outs.filter((l) => LP_SET.has(l.cp));
-      const lpIn = ins.filter((l) => LP_SET.has(l.cp));
-      if (lpOut.length && !lpIn.length) { kind = "lp-add"; prim = biggest(lpOut); sec = lpOut.find((l) => l !== prim); }
-      else if (lpIn.length && !lpOut.length) { kind = "lp-remove"; prim = biggest(lpIn); sec = lpIn.find((l) => l !== prim); }
-      else { kind = "lp"; prim = biggest([...lpOut, ...lpIn]); }
-    }
-    else if (outs.length && ins.length) { kind = "swap"; prim = biggest(ins); sec = biggest(outs); } // acquired = the inbound token
+    else if (isSwap) { kind = "swap"; prim = biggest(acquired); sec = biggest(outs); }
+    else if (isLpAdd) { kind = "lp-add"; prim = biggest(outs); sec = outs.find((l) => l !== prim); }
+    else if (isLpRemove) { kind = "lp-remove"; prim = biggest(ins); sec = ins.find((l) => l !== prim); }
     else if (outs.length) { kind = "sell"; prim = biggest(outs); }
     else { kind = "buy"; prim = biggest(ins); }
 

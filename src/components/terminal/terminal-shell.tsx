@@ -12,7 +12,9 @@ import { KeyModal, InlineKeySetup } from "@/components/terminal/key-modal";
 import { NewsPanel, RatingsPanel, FundamentalsPanel, MacroPanel, PredictionsPanel, OnchainPanel } from "@/components/terminal/data-panels";
 import { Portfolio, usePortfolio } from "@/components/terminal/portfolio";
 import { PerpsPanel } from "@/components/terminal/perps-panel";
-import { PhantomSwap } from "@/components/alpha/phantom-swap";
+import { SwapTicket } from "@/components/terminal/swap-ticket";
+import { LiveTape } from "@/components/terminal/live-tape";
+import { OddsPanel } from "@/components/terminal/odds-panel";
 import { TVEconCalendar, TVHeatmap } from "@/components/terminal/tv-widgets";
 import { UrizenMark } from "@/components/brand/marks";
 import { STOCKS } from "@/lib/stocks";
@@ -90,6 +92,11 @@ export function TerminalShell() {
   const [indices, setIndices] = useState<{ label: string; changePct: number; price: number }[]>([]);
   const handlesRef = useRef<Record<string, ChartHandle | null>>({});
   const cursorRef = useRef<CursorHandle>(null);
+  // the agent's visible cursor — draws where it works. Users who find it distracting can switch it off
+  // (the actions still happen, just instantly). Persisted; on by default because it's the signature move.
+  const [cursorOn, setCursorOn] = useState(true);
+  useEffect(() => { try { const v = localStorage.getItem("urizen.terminal.cursor"); if (v != null) setCursorOn(v === "1"); } catch { /* noop */ } }, []);
+  useEffect(() => { try { localStorage.setItem("urizen.terminal.cursor", cursorOn ? "1" : "0"); } catch { /* noop */ } }, [cursorOn]);
   const [messages, setMessages] = useState<HMsg[]>([]);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
@@ -98,7 +105,6 @@ export function TerminalShell() {
   const queueTrade = (t: ProposedTrade) => setPendingTrades((q) => [...q, t]);
   const clearTrade = (i: number) => setPendingTrades((q) => q.filter((_, j) => j !== i));
   const [keyOpen, setKeyOpen] = useState(false);
-  const [swapOpen, setSwapOpen] = useState(false);
   // ONE big board pop-up that holds MULTIPLE panel tiles (the user + agent add into it). Dims the
   // background; tiled by default, draggable when the user flips the drag toggle.
   const [panelOpen, setPanelOpen] = useState(false);
@@ -178,7 +184,7 @@ export function TerminalShell() {
 
   // execute the agent's actions on the terminal, moving the visible cursor as it goes
   const dispatch = async (actions: HAction[]) => {
-    const cur = cursorRef.current;
+    const cur = cursorOn ? cursorRef.current : null;
     // guard against a misbehaving model: cap the run and drop duplicate actions (the "spam" bug)
     const seen = new Set<string>();
     const list = (actions || []).slice(0, 8).filter((a) => { const k = JSON.stringify(a); if (seen.has(k)) return false; seen.add(k); return true; });
@@ -298,11 +304,13 @@ export function TerminalShell() {
       if (!on) return;
       const g: Mover[] = d?.gainers || [], l: Mover[] = d?.losers || [];
       setGainers(g); setLosers(l); setSession(d?.session || "");
+      // the FULL 24/7 on-chain universe (falls back to just the movers if an older payload)
+      const all: Mover[] = Array.isArray(d?.all) && d.all.length ? d.all : [...g, ...l];
       const map: Record<string, Quote> = {};
-      [...g, ...l].forEach((m) => { map[m.symbol] = { price: m.price, changePct: m.changePct }; });
+      all.forEach((m) => { map[m.symbol] = { price: m.price, changePct: m.changePct }; });
       setQuotes(map);
     }).catch(() => {});
-    load(); const id = setInterval(load, 30000);
+    load(); const id = setInterval(load, 15000);
     return () => { on = false; clearInterval(id); };
   }, []);
 
@@ -349,18 +357,6 @@ export function TerminalShell() {
       <HorizonCursor ref={cursorRef} />
       <KeyModal open={keyOpen} onClose={() => setKeyOpen(false)} onChanged={() => {}} />
       {newAgentOpen && <NewAgentModal onClose={() => setNewAgentOpen(false)} onCreate={createAgent} />}
-      {swapOpen && (
-        <div className="fixed inset-0 z-[80] grid place-items-center bg-black/60 p-4 backdrop-blur-[2px]" onClick={() => setSwapOpen(false)}>
-          <div onClick={(e) => e.stopPropagation()} className="w-full max-w-md">
-            <div className="mb-2 flex items-center justify-between px-1">
-              <span className="font-mono text-[0.6rem] uppercase tracking-[0.18em] text-muted-foreground">Swap · Rialto best-route</span>
-              <button onClick={() => setSwapOpen(false)} className="font-mono text-sm text-muted-foreground transition-colors hover:text-foreground">✕</button>
-            </div>
-            <PhantomSwap defaultBuy={selected} />
-          </div>
-        </div>
-      )}
-
       {/* ── top bar ── */}
       <header className="relative z-40 flex h-[52px] shrink-0 items-center gap-4 border-b border-border bg-[#0a0a0b]/80 px-4 backdrop-blur-md">
         <Link href="/" className="flex items-center gap-2.5">
@@ -373,21 +369,23 @@ export function TerminalShell() {
         </div>
         <div className="ml-auto flex items-center gap-3">
           <MarketClock />
-          <button onClick={() => setSwapOpen(true)} className="rounded-md border border-signal/50 bg-signal/10 px-3.5 py-1.5 font-mono text-[0.72rem] font-medium uppercase tracking-[0.12em] text-signal transition-colors hover:bg-signal/20">Swap</button>
           <ConnectWalletButton />
         </div>
       </header>
 
-      {/* ── compact ticker ribbon (our data, our style) ── */}
-      <div className="relative z-10 flex h-7 shrink-0 items-center overflow-hidden border-b border-border bg-[#0a0a0b]/60">
-        <TickerRibbon indices={indices} quotes={quotes} />
+      {/* ── the live tape — always scrolling, always flashing, 24/7 on-chain (dims while agent draws) ── */}
+      <div className={`relative z-10 h-7 shrink-0 overflow-hidden border-b border-border bg-[#0a0a0b]/70 transition-opacity duration-500 ${busy ? "opacity-25" : ""}`}>
+        <LiveTape quotes={quotes} indices={indices} />
       </div>
 
       {/* ── body: three rails ── */}
-      <div className="relative z-10 grid min-h-0 flex-1 gap-2 p-2" style={{ gridTemplateColumns: "minmax(215px,245px) minmax(0,1fr) minmax(400px,460px)" }}>
-        {/* LEFT: market tickers + your portfolio */}
-        <div className="grid min-h-0 grid-rows-[1.5fr_1fr] gap-2">
-          <Pane n={1} title="Markets" right={<span className="font-mono text-[0.6rem] text-muted-foreground">{session || "24/7"}</span>}>
+      <div className="relative z-10 grid min-h-0 flex-1 gap-2 p-2" style={{ gridTemplateColumns: "minmax(250px,280px) minmax(0,1fr) minmax(400px,460px)" }}>
+        {/* LEFT: swap on top, then markets + a compact portfolio (dims while the agent draws) */}
+        <div className={`grid min-h-0 grid-rows-[auto_minmax(0,1.5fr)_minmax(0,0.8fr)] gap-2 transition-opacity duration-500 ${busy ? "opacity-25" : ""}`}>
+          <Pane n={1} title="Swap · Trade" className="ring-1 ring-signal/25 shadow-[0_14px_34px_-22px_rgba(52,240,3,0.45)]">
+            <SwapTicket defaultBuy={selected} />
+          </Pane>
+          <Pane n={2} title="Markets" right={<span className="font-mono text-[0.6rem] text-muted-foreground">{session || "24/7"}</span>}>
             <table className="w-full border-collapse text-[0.78rem]">
               <tbody>
                 {universe.map((s) => {
@@ -404,27 +402,27 @@ export function TerminalShell() {
               </tbody>
             </table>
           </Pane>
-          <Pane n={2} title="Portfolio" right={<button onClick={() => setSwapOpen(true)} className="font-mono text-[0.56rem] uppercase tracking-widest text-signal transition-colors hover:text-foreground">swap ↗</button>}>
+          <Pane n={3} title="Portfolio" bodyClass="text-[0.92em]">
             <Portfolio holdings={holdings} total={portfolioTotal} loading={portfolioLoading} connected={portfolioConnected} onPick={setSelected} />
           </Pane>
         </div>
 
-        {/* CENTER: the chart (its 44px header carries instrument, price, tools) + a news strip below */}
-        <div className="grid min-h-0 grid-rows-[1fr_170px] gap-2">
-        <section className="flex min-h-0 flex-col overflow-hidden border border-border bg-[#0b0b0d]/62 backdrop-blur-md">
+        {/* CENTER: the chart (its 44px header carries instrument, price, tools) + a news + odds strip below */}
+        <div className="grid min-h-0 grid-rows-[1fr_188px] gap-2">
+        <section className={`flex min-h-0 flex-col overflow-hidden border bg-[#0b0b0d]/62 backdrop-blur-md transition-all duration-500 ${busy ? "border-signal/40 shadow-[0_0_40px_-8px_rgba(52,240,3,0.35)]" : "border-border"}`}>
           <header className="flex h-11 shrink-0 items-center gap-3 border-b border-border pl-3 pr-2">
-            <div className="flex min-w-0 items-center gap-2.5">
+            <div className="flex shrink-0 items-center gap-2.5">
               <Logo s={selected} size={22} />
-              <div className="flex min-w-0 items-baseline gap-2">
-                <span className="truncate font-display text-[0.95rem] leading-none">{sel?.name ?? selected}</span>
-                <span className="shrink-0 font-mono text-[0.56rem] uppercase tracking-[0.14em] text-muted-foreground/70">{selected}</span>
+              <div className="flex items-baseline gap-2">
+                <span className="font-display text-[0.95rem] leading-none">{selected}</span>
+                <span className="hidden max-w-[120px] truncate font-mono text-[0.58rem] uppercase tracking-[0.12em] text-muted-foreground/70 xl:inline">{sel?.name ?? ""}</span>
               </div>
             </div>
-            <div className="flex items-baseline gap-2">
-              <span className="font-display text-lg leading-none tabular-nums">${head ? fmt(head.price) : (quotes[selected] ? fmt(quotes[selected].price) : "—")}</span>
-              <span className={`font-mono text-[0.78rem] tabular-nums ${up ? "text-signal" : "text-[#ff5a5a]"}`}>{up ? "▲" : "▼"} {pct(changePct)}</span>
+            <div className="flex items-baseline gap-1.5 whitespace-nowrap">
+              <span className="font-display text-[1.15rem] leading-none tabular-nums">${head ? fmt(head.price) : (quotes[selected] ? fmt(quotes[selected].price) : "—")}</span>
+              <span className={`font-mono text-[0.74rem] tabular-nums ${up ? "text-signal" : "text-[#ff5a5a]"}`}>{up ? "▲" : "▼"}&thinsp;{pct(changePct)}</span>
             </div>
-            {session && <span className="hidden shrink-0 rounded-full border border-signal/25 bg-signal/10 px-2 py-0.5 font-mono text-[0.54rem] uppercase tracking-widest text-signal xl:inline">{session}</span>}
+            {session && <span className="hidden shrink-0 rounded-sm border border-signal/25 bg-signal/10 px-1.5 py-0.5 font-mono text-[0.52rem] uppercase tracking-widest text-signal 2xl:inline">{session}</span>}
             <div className="ml-auto flex shrink-0 items-center gap-1.5">
               <div className="flex items-center rounded-md border border-border p-0.5">
                 {INTERVALS.map((r) => <button key={r} onClick={() => setTf(r)} className={`rounded px-1.5 py-0.5 font-mono text-[0.6rem] uppercase transition-colors ${tf === r ? "bg-signal/15 text-signal" : "text-muted-foreground hover:text-foreground"}`}>{r}</button>)}
@@ -437,22 +435,28 @@ export function TerminalShell() {
                 <button onClick={clearIndicators} title="clear indicators" className="grid h-5 w-6 place-items-center rounded font-mono text-[0.72rem] leading-none text-muted-foreground transition-colors hover:bg-white/5 hover:text-[#ff5a5a]">∿</button>
               </div>
               <AddChartButton disabled={charts.length >= 4} onPick={openChart} quotes={quotes} openSymbols={charts.map((c) => c.symbol)} />
-              <button onClick={() => setPanelOpen(true)} title="panels (news, ratings, watch…)" className={`flex items-center gap-1 rounded-md border px-2 py-1 font-mono text-[0.6rem] uppercase tracking-wide transition-colors ${panelOpen || panels.length ? "border-signal/40 text-signal" : "border-border text-muted-foreground hover:text-foreground"}`}>▦ panels{panels.length ? <span className="text-signal">· {panels.length}</span> : null}</button>
+              <button onClick={() => setPanelOpen(true)} title="add panels — ratings, fundamentals, macro, heatmap…" className={`flex items-center gap-1.5 rounded-md border px-2 py-1 font-mono text-[0.6rem] uppercase tracking-wide transition-colors ${panelOpen ? "border-signal/40 text-signal" : "border-border text-muted-foreground hover:text-foreground"}`}>▦ Panels</button>
             </div>
           </header>
           <div className="min-h-0 flex-1">
             <ChartWorkspace charts={charts} activeId={activeId} interval={tf} onFocus={setActiveId} onClose={closeChart} onHandle={(id, h) => { handlesRef.current[id] = h; }} />
           </div>
         </section>
-        <Pane n={5} title={`News · ${selected}`} right={<button onClick={() => openPanel("news")} className="font-mono text-[0.56rem] uppercase tracking-widest text-muted-foreground transition-colors hover:text-signal">expand ↗</button>}>
-          <NewsPanel symbol={selected} />
-        </Pane>
+        <div className={`grid min-h-0 grid-cols-[1fr_minmax(300px,340px)] gap-2 transition-opacity duration-500 ${busy ? "opacity-25" : ""}`}>
+          <Pane n={5} title={`News · ${selected}`} right={<button onClick={() => openPanel("news")} className="font-mono text-[0.56rem] uppercase tracking-widest text-muted-foreground transition-colors hover:text-signal">expand ↗</button>}>
+            <NewsPanel symbol={selected} />
+          </Pane>
+          <Pane n={6} title="Prediction odds" right={<span className="font-mono text-[0.56rem] uppercase tracking-widest text-muted-foreground/70">Polymarket</span>}>
+            <OddsPanel />
+          </Pane>
+        </div>
         </div>
 
-        {/* RIGHT: the terminal agent */}
+        {/* RIGHT: the terminal agent — full height */}
         <HorizonRail selected={selected} messages={messages} busy={busy} status={status} onAsk={ask}
           pendingTrades={pendingTrades} taker={address ?? null} onClearTrade={clearTrade} onSettings={() => setKeyOpen(true)} connected={isConnected}
-          agents={agents} activeAgent={activeAgent} onSelectAgent={selectAgent} onNewAgent={() => setNewAgentOpen(true)} />
+          agents={agents} activeAgent={activeAgent} onSelectAgent={selectAgent} onNewAgent={() => setNewAgentOpen(true)}
+          cursorOn={cursorOn} onToggleCursor={() => setCursorOn((v) => !v)} />
       </div>
 
       {/* ONE big board — a dimmed-backdrop pop-up that holds MULTIPLE panel tiles. Add as many as you
@@ -646,25 +650,6 @@ function WalletGate() {
 }
 
 
-function TickerRibbon({ indices, quotes }: { indices: { label: string; changePct: number; price: number }[]; quotes: Record<string, { price: number; changePct: number }> }) {
-  const stocks = ["NVDA", "AAPL", "TSLA", "MSFT", "META", "AMZN", "GOOGL", "AMD", "COIN", "SPY", "QQQ"].map((s) => ({ label: s, q: quotes[s] })).filter((x) => x.q);
-  const items = [
-    ...indices.map((m) => ({ label: m.label, price: m.price, ch: m.changePct })),
-    ...stocks.map((x) => ({ label: x.label, price: x.q!.price, ch: x.q!.changePct })),
-  ];
-  if (!items.length) return <div className="px-4 font-mono text-[0.6rem] uppercase tracking-widest text-muted-foreground/40">loading markets…</div>;
-  return (
-    <div className="flex h-full items-center gap-5 overflow-x-auto px-4 font-mono text-[0.64rem] whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none]">
-      {items.map((it, i) => (
-        <span key={i} className="flex shrink-0 items-center gap-1.5">
-          <span className="uppercase tracking-wide text-muted-foreground">{it.label}</span>
-          <span className="tabular-nums text-foreground/75">{fmt(it.price)}</span>
-          <span className={`tabular-nums ${it.ch >= 0 ? "text-signal" : "text-[#ff5a5a]"}`}>{it.ch >= 0 ? "+" : ""}{it.ch.toFixed(2)}%</span>
-        </span>
-      ))}
-    </div>
-  );
-}
 
 function MoversBody({ rows, onPick, up }: { rows: Mover[]; onPick: (s: string) => void; up?: boolean }) {
   if (rows.length === 0) return <Empty>loading…</Empty>;
@@ -698,7 +683,7 @@ function renderMd(text: string): React.ReactNode {
 }
 
 // ── Horizon agent rail — a real chat that operates the terminal ──
-function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrades, taker, onClearTrade, onSettings, connected, agents, activeAgent, onSelectAgent, onNewAgent }: { selected: string; messages: HMsg[]; busy: boolean; status: string; onAsk: (t: string) => void; pendingTrades: ProposedTrade[]; taker: string | null; onClearTrade: (i: number) => void; onSettings: () => void; connected: boolean; agents: Agent[]; activeAgent: Agent | null; onSelectAgent: (id: string) => void; onNewAgent: () => void }) {
+function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrades, taker, onClearTrade, onSettings, connected, agents, activeAgent, onSelectAgent, onNewAgent, cursorOn, onToggleCursor }: { selected: string; messages: HMsg[]; busy: boolean; status: string; onAsk: (t: string) => void; pendingTrades: ProposedTrade[]; taker: string | null; onClearTrade: (i: number) => void; onSettings: () => void; connected: boolean; agents: Agent[]; activeAgent: Agent | null; onSelectAgent: (id: string) => void; onNewAgent: () => void; cursorOn: boolean; onToggleCursor: () => void }) {
   const [input, setInput] = useState("");
   const [agentMenu, setAgentMenu] = useState(false);
   const agentRef = useRef<HTMLDivElement>(null);
@@ -725,8 +710,13 @@ function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrades, t
   const send = () => { const raw = input; setInput(""); setSlashIdx(0); setAtIdx(0); const r = resolveSlashCommand(raw); onAsk(r ? r.skill.prompt(r.arg) : raw); };
 
   return (
-    <Pane n={3} title={activeAgent?.name || "Agent"} right={
+    <Pane n={4} title={activeAgent?.name || "Urizen"} right={
       <div className="flex items-center gap-1.5">
+        {/* toggle the agent's visible drawing cursor */}
+        <button onClick={onToggleCursor} title={cursorOn ? "Agent cursor: on (click to hide)" : "Agent cursor: off (click to show)"}
+          className={`grid h-6 w-6 place-items-center rounded-md border transition-colors ${cursorOn ? "border-signal/50 bg-signal/10 text-signal" : "border-border text-muted-foreground hover:text-foreground"}`}>
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden><path d="M4 2l6.4 15.3 2.1-6.1 6.1-2.1L4 2z" /></svg>
+        </button>
         {/* persona selector — name or switch agents */}
         <div ref={agentRef} className="relative">
           <button onClick={() => setAgentMenu((v) => !v)} title="switch persona" className="flex items-center gap-1 rounded-md border border-border px-2 py-1 font-mono text-[0.58rem] uppercase tracking-wide text-muted-foreground transition-colors hover:border-signal/40 hover:text-signal">
@@ -759,7 +749,7 @@ function HorizonRail({ selected, messages, busy, status, onAsk, pendingTrades, t
               <div className="rounded-xl rounded-tl-sm border border-border bg-white/[0.03] p-3 text-[0.82rem] leading-relaxed text-foreground/90">
                 {activeAgent
                   ? <>i&apos;m <span className="text-signal">{activeAgent.name}</span> — your {activeAgent.mandate.toLowerCase()} desk. tell me what to look at and i&apos;ll read the tape, draw on the chart, pull news, open panels, and set up trades for you to sign.</>
-                  : <>i run this terminal. tell me what to look at — i&apos;ll read the tape, draw on the chart, pull news, open panels, and set up trades for you to sign.</>}
+                  : <>i&apos;m <span className="text-signal">Urizen</span> — i run this terminal. tell me what to look at and i&apos;ll read the tape, draw on the chart, pull news, open panels, and set up trades for you to sign.</>}
               </div>
             </div>
             {!activeAgent && (

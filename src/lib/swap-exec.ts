@@ -14,31 +14,39 @@ export async function executeSwap(quote: Quote, from: string, paySym: string, on
   if (getChainId(wagmiConfig) !== RH) await switchChain(wagmiConfig, { chainId: RH });
 
   const payTok = resolveToken(paySym);
+  const sellToken = payTok.address as `0x${string}`;
   let data = quote.tx.data;
 
-  if (quote.permit2 && !payTok.native) {
-    const sellToken = payTok.address as `0x${string}`;
+  // Ensure a max ERC-20 approval to `spender` exists (one-time per token). No-op for native sells.
+  const ensureApproval = async (spender: `0x${string}`) => {
+    if (payTok.native) return;
     onStatus?.("Checking approval…");
     const allowance = (await readContract(wagmiConfig, {
-      address: sellToken, abi: erc20Abi, functionName: "allowance", args: [from as `0x${string}`, PERMIT2 as `0x${string}`], chainId: RH,
+      address: sellToken, abi: erc20Abi, functionName: "allowance", args: [from as `0x${string}`, spender], chainId: RH,
     })) as bigint;
     if (allowance < BigInt(quote.sell_amount)) {
       onStatus?.(`Approve ${paySym} (one-time)…`);
       const approveHash = await writeContract(wagmiConfig, {
-        address: sellToken, abi: erc20Abi, functionName: "approve", args: [PERMIT2 as `0x${string}`, maxUint256], chainId: RH,
+        address: sellToken, abi: erc20Abi, functionName: "approve", args: [spender, maxUint256], chainId: RH,
       });
       await waitForTransactionReceipt(wagmiConfig, { hash: approveHash, chainId: RH });
     }
+  };
+
+  if (quote.permit2 && !payTok.native) {
+    // Permit2 settlement: approve Permit2 once, then sign the order per swap (2 interactions after the
+    // one-time approval). Kept as a fallback if Rialto returns a permit2 quote.
+    await ensureApproval(PERMIT2 as `0x${string}`);
     onStatus?.("Sign the swap…");
     const p = quote.permit2;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const signature = await signTypedData(wagmiConfig, {
-      domain: p.domain,
-      types: permit2SignTypes(p),
-      primaryType: p.primaryType,
-      message: p.message,
-    } as any);
+    const signature = await signTypedData(wagmiConfig, { domain: p.domain, types: permit2SignTypes(p), primaryType: p.primaryType, message: p.message } as any);
     data = spliceSignature(quote.tx.data, signature, quote.tx.signature_offset);
+  } else if (!payTok.native) {
+    // Allowance settlement: approve the router ONCE (max), then every swap is a single transaction —
+    // no per-swap signature. This is the smooth path (fixes "had to sign multiple times").
+    const spender = (quote.issues?.allowance?.spender || quote.tx.to) as `0x${string}`;
+    await ensureApproval(spender);
   }
 
   onStatus?.("Confirm in your wallet…");

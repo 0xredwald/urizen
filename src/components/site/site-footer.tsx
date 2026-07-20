@@ -21,8 +21,8 @@ const COLS = [
     head: "Connect",
     links: [
       { label: "X · @urizenfund", href: "https://x.com/urizenfund" },
-      { label: "GitHub", href: "https://github.com" },
-      { label: "Telegram", href: "#" },
+      { label: "GitHub", href: "https://github.com/0xredwald/urizen" },
+      { label: "Telegram", href: "https://t.me/urizenalpha" },
     ],
   },
 ];

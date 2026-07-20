@@ -66,6 +66,9 @@ export async function GET(req: Request) {
   ]);
 
   // ── real data only — never invent a number, ticker, headline or event ──
+  // Indices don't trade pre/post-market; stocks do. When they're from different sessions the movers
+  // header is labeled (e.g. "TOP MOVERS · PREMARKET") so nothing is misread as same-session.
+  const moversSession: string = movers?.session || "";
   const pct = (n: number) => `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
   const idxLine = (label: string) => {
     const it = (mkt?.items || []).find((m: { label: string }) => m.label === label);
@@ -105,7 +108,8 @@ export async function GET(req: Request) {
     `DATE: ${dateStr} (US market close)\n` +
     `INDICES (session % change): S&P 500 ${idxLine("S&P 500")}, Nasdaq ${idxLine("Nasdaq")}, Dow ${idxLine("Dow")}, Russell 2000 ${idxLine("Russell 2000")}, VIX ${idxLine("VIX")}, US 10Y ${idxLine("US 10Y")}.\n` +
     `RATES/MACRO LEVELS: ${rateStr || "n/a"}.\n` +
-    `TOP GAINERS (tokenized-stock universe): ${moverStr(gainers)}.\n` +
+    `MOVERS SESSION: ${moversSession || "session close (same as indices)"}\n` +
+    `TOP GAINERS (tokenized-stock universe, ${moversSession || "at the close"}): ${moverStr(gainers)}.\n` +
     `TOP LOSERS: ${moverStr(losers)}.\n` +
     `REAL HEADLINES (use ONLY these for reasons + headlines, trim them):\n${headlines.map((h) => `- ${h}`).join("\n") || "- (none)"}\n` +
     `PREDICTION MARKETS (Polymarket, real odds — use verbatim):\n${odds.map((o) => `- ${o}`).join("\n") || "- (none)"}\n` +
@@ -120,7 +124,7 @@ export async function GET(req: Request) {
       "FORMATTING: rich, varied Telegram markdown — **bold** section headers + every number, _italic_ for prose, `code` for tickers/index names, '> ' blockquotes for the call, '• ' bullets, ▲/▼ for movers. Visually structured. No outer title (a banner image sits above).",
       "Sections in this order:",
       "**MARKET** — `S&P` [%] · `Nasdaq` [%] · `Dow` [%] · `Russell` [%], then _one sentence_ on the session.",
-      "**TOP MOVERS** — ▲/▼ **ticker** [%] — short reason (from a provided headline; else none).",
+      "**TOP MOVERS** — CRITICAL: if MOVERS SESSION is PREMARKET / AFTER HOURS / INTRADAY, title this header EXACTLY `TOP MOVERS · <SESSION>` (those moves are from that session, NOT the same session as the index figures — never present them as one). If it's the session close, just `TOP MOVERS`. Then ▲/▼ **ticker** [%] — short reason (from a provided headline; else none).",
       "**HEADLINES** — up to 3 '• ' bullets from the provided headlines.",
       "**THESIS** — 2 tight sentences: what's driving the tape (rotation, rates/VIX, the movers). No rambling.",
       "**THE ODDS** — the provided Polymarket lines as '• ' bullets (question → outcome %). Optionally ONE short clause on what they imply.",

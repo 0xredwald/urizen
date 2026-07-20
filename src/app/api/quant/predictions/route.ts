@@ -27,9 +27,48 @@ function yesProb(m: Mkt): number {
   return Math.max(...prices);
 }
 
+type TopMkt = { question?: string; outcomes?: unknown; outcomePrices?: unknown; volume24hr?: unknown; volumeNum?: unknown; volume?: unknown; liquidity?: unknown; groupItemTitle?: string; slug?: string; events?: { slug?: string }[]; closed?: boolean; active?: boolean };
+
+// No query → the highest-volume live markets right now (the "odds board"). Always populated, so the
+// terminal's odds section is never empty. Real-money, keyless (Polymarket gamma /markets).
+async function topMarkets() {
+  const r = await fetch(
+    "https://gamma-api.polymarket.com/markets?closed=false&active=true&order=volume24hr&ascending=false&limit=40",
+    { headers: { "User-Agent": UA }, next: { revalidate: 120 } },
+  );
+  if (!r.ok) throw new Error(`polymarket ${r.status}`);
+  const arr = (await r.json()) as TopMkt[];
+  const markets = (Array.isArray(arr) ? arr : [])
+    .filter((m) => !m.closed && jparse(m.outcomePrices).length >= 2)
+    .map((m) => {
+      const prob = yesProb(m);
+      const yi = jparse(m.outcomes).findIndex((o) => /^yes$/i.test(o));
+      const outcome = yi >= 0 ? "Yes" : (m.groupItemTitle || "leading");
+      const slug = m.events?.[0]?.slug || m.slug;
+      return {
+        question: m.question || "",
+        probability: prob,
+        outcome,
+        volumeUsd: numish(m.volume24hr) ?? numish(m.volumeNum) ?? numish(m.volume),
+        url: slug ? `https://polymarket.com/event/${slug}` : "https://polymarket.com",
+      };
+    })
+    .filter((m) => m.question && m.probability != null && m.probability < 0.985 && m.probability > 0.015)
+    .sort((a, b) => (b.volumeUsd ?? 0) - (a.volumeUsd ?? 0))
+    .slice(0, 12);
+  return markets;
+}
+
 export async function GET(req: Request) {
   const q = (new URL(req.url).searchParams.get("q") || "").trim();
-  if (!q) return json({ error: "provide ?q=" }, { status: 400 });
+  if (!q) {
+    try {
+      const markets = await topMarkets();
+      return json({ query: "", markets, source: "Polymarket" }, { headers: { "cache-control": "public, max-age=120, s-maxage=300, stale-while-revalidate=1800" } });
+    } catch (e) {
+      return json({ error: `failed to load predictions: ${(e as Error).message}` }, { status: 502 });
+    }
+  }
 
   try {
     const r = await fetch(`https://gamma-api.polymarket.com/public-search?q=${encodeURIComponent(q)}&limit_per_type=10`, {

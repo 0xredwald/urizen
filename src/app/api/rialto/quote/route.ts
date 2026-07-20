@@ -41,7 +41,9 @@ export async function GET(req: Request) {
   const buy = u.searchParams.get("buy_token");
   const amount = u.searchParams.get("sell_amount");
   const taker = u.searchParams.get("taker");
-  const slippageBps = u.searchParams.get("slippage_bps") || "100";
+  // default 2% — Robinhood-Chain stock pools are thin, and 1% reverted often (the "didn't go through"
+  // retries). Callers can still pass a tighter value.
+  const slippageBps = u.searchParams.get("slippage_bps") || "200";
   if (!sell || !buy || !amount || !taker) {
     return json({ error: "sell_token, buy_token, sell_amount and taker are required" }, { status: 400 });
   }

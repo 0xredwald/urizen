@@ -101,6 +101,32 @@ export async function getMarketStats(token: string): Promise<MarketStats | null>
   };
 }
 
+/** 24/7 on-chain quote (price + rolling 24h change + 24h volume) for ANY tokenized-equity on RH,
+ *  from DexScreener's deepest pool WHERE THIS TOKEN IS THE BASE asset — so `priceUsd` is unambiguously
+ *  this token's price, never the counter-asset's. The tokenized-stock market on RH never closes, so
+ *  this keeps the terminal live overnight, weekends and holidays. Returns null → caller falls back. */
+export async function getTokenQuote(
+  token: string,
+): Promise<{ price: number; change24h: number; volume24h: number } | null> {
+  try {
+    const r = await fetch(`${DS}/token-pairs/v1/${ROBINHOOD_CHAIN.dexscreenerSlug}/${token}`, {
+      next: { revalidate: 20 },
+    });
+    if (!r.ok) return null;
+    const pairs = (await r.json()) as any[];
+    if (!Array.isArray(pairs) || pairs.length === 0) return null;
+    const t = token.toLowerCase();
+    const mine = pairs.filter((p) => (p?.baseToken?.address ?? "").toLowerCase() === t);
+    if (mine.length === 0) return null; // token is the quote asset here → priceUsd isn't ours
+    const p = mine.reduce((best, cur) => ((cur?.liquidity?.usd ?? 0) > (best?.liquidity?.usd ?? 0) ? cur : best));
+    const price = Number(p?.priceUsd) || 0;
+    if (!(price > 0)) return null;
+    return { price, change24h: Number(p?.priceChange?.h24) || 0, volume24h: Number(p?.volume?.h24) || 0 };
+  } catch {
+    return null;
+  }
+}
+
 export type FlywheelLp = {
   reserveUsd: number;
   volume24h: number;

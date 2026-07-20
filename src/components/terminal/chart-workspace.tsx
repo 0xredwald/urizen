@@ -9,22 +9,35 @@ import { KlineChart, type ChartHandle } from "@/components/terminal/kline-chart"
 const fmt = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const flogo = (s: string) => `https://financialmodelingprep.com/image-stock/${s}.png`;
 
-function ChartPanel({ id, symbol, interval, active, closable, onFocus, onClose, onHandle }: {
-  id: string; symbol: string; interval: string; active: boolean; closable: boolean;
+function ChartPanel({ id, symbol, interval, active, closable, bare, onFocus, onClose, onHandle }: {
+  id: string; symbol: string; interval: string; active: boolean; closable: boolean; bare: boolean;
   onFocus: () => void; onClose: () => void; onHandle: (id: string, h: ChartHandle | null) => void;
 }) {
   const [head, setHead] = useState<{ price: number; prevClose: number } | null>(null);
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {
+    // bare = single chart: the section header already shows the price, so skip the extra poll entirely
+    // (this was a redundant fetch loop). Only the multi-chart mini-header needs its own price.
+    if (bare) { setLoaded(true); return; }
     let on = true;
-    // light fetch just for the mini-header price/change; the chart self-loads its own full series
     const load = () => fetch(`/api/quant/ohlc?symbol=${encodeURIComponent(symbol)}&interval=${interval}`).then((r) => r.json()).then((d) => {
       if (!on) return; setLoaded(true); setHead(d?.price != null && d?.prevClose != null ? { price: d.price, prevClose: d.prevClose } : null);
     }).catch(() => { if (on) setLoaded(true); });
     load(); const t = setInterval(load, 20000);
     return () => { on = false; clearInterval(t); };
-  }, [symbol, interval]);
+  }, [symbol, interval, bare]);
   const ch = head ? (head.price / head.prevClose - 1) * 100 : 0; const up = ch >= 0;
+
+  // single chart → let the section header carry the instrument; the chart is bare (no duplicate header,
+  // no double border). Only the multi-chart playground shows a per-panel header to tell them apart.
+  if (bare) {
+    return (
+      <div className="relative min-h-0">
+        <KlineChart ref={(h) => onHandle(id, h)} symbol={symbol} interval={interval} />
+        {!loaded && <div className="pointer-events-none absolute inset-x-0 bottom-2 text-center font-mono text-[0.6rem] uppercase tracking-widest text-muted-foreground/40">loading…</div>}
+      </div>
+    );
+  }
   return (
     <div onMouseDown={onFocus} className={`relative flex min-h-0 flex-col overflow-hidden rounded-md border transition-colors ${active ? "border-signal/50 shadow-[0_0_0_1px_rgba(52,240,3,0.15)]" : "border-border hover:border-white/20"}`}>
       <div className="flex h-7 shrink-0 items-center gap-2 border-b border-border px-2">
@@ -33,7 +46,7 @@ function ChartPanel({ id, symbol, interval, active, closable, onFocus, onClose, 
         <span className="font-mono text-[0.72rem] text-foreground">{symbol}</span>
         {head && <span className="font-mono text-[0.68rem] tabular-nums text-muted-foreground">${fmt(head.price)}</span>}
         {head && <span className={`font-mono text-[0.66rem] tabular-nums ${up ? "text-signal" : "text-[#ff5a5a]"}`}>{up ? "+" : ""}{ch.toFixed(2)}%</span>}
-        {active && <span className="ml-1 h-1.5 w-1.5 rounded-full bg-signal" title="Horizon draws here" />}
+        {active && <span className="ml-1 h-1.5 w-1.5 rounded-full bg-signal" title="Urizen draws here" />}
         <span className="ml-auto" />
         {closable && <button onClick={(e) => { e.stopPropagation(); onClose(); }} className="px-1 text-muted-foreground/50 hover:text-[#ff5a5a]">×</button>}
       </div>
@@ -55,7 +68,7 @@ export function ChartWorkspace({ charts, activeId, interval, onFocus, onClose, o
   return (
     <div className="grid h-full gap-2 p-2" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0,1fr))`, gridTemplateRows: `repeat(${rows}, minmax(0,1fr))` }}>
       {charts.map((c) => (
-        <ChartPanel key={c.id} id={c.id} symbol={c.symbol} interval={interval} active={c.id === activeId} closable={n > 1}
+        <ChartPanel key={c.id} id={c.id} symbol={c.symbol} interval={interval} active={c.id === activeId} closable={n > 1} bare={n <= 1}
           onFocus={() => onFocus(c.id)} onClose={() => onClose(c.id)} onHandle={onHandle} />
       ))}
     </div>

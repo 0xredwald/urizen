@@ -62,7 +62,7 @@ export function SwapPanel({
     debRef.current = setTimeout(async () => {
       setLoading(true);
       try {
-        const q = await getQuote({ sellSym: pay, buySym: recv, sellAmount: amount, taker, slippageBps: 100 });
+        const q = await getQuote({ sellSym: pay, buySym: recv, sellAmount: amount, taker, slippageBps: 200 });
         setQuote(q);
       } catch (e) {
         const er = e as Error & { notConfigured?: boolean };

@@ -133,7 +133,7 @@ function SwapCard({ a, taker }: { a: Extract<Artifact, { type: "swap" }>; taker:
   const quoteIt = async () => {
     if (!taker) { setErr("Connect your wallet to trade."); return; }
     setLoading(true); setErr(null); setNotConfigured(false);
-    try { setQuote(await getQuote({ sellSym: p.sellSym, buySym: p.buySym, sellAmount: p.sellAmount, taker, slippageBps: 100 })); }
+    try { setQuote(await getQuote({ sellSym: p.sellSym, buySym: p.buySym, sellAmount: p.sellAmount, taker, slippageBps: 200 })); }
     catch (e) { const er = e as Error & { notConfigured?: boolean }; setNotConfigured(!!er.notConfigured); setErr(er.message); }
     finally { setLoading(false); }
   };
