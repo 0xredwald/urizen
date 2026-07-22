@@ -5,7 +5,7 @@
 // (server proxy /api/alpha/free). JSON-action protocol so it works on any model, including free ones.
 
 import type { Candle, Indicators } from "./quant";
-import { getActiveBinding, FREE_MODEL } from "./agents";
+import { getActiveBinding, removeProviderKey, FREE_MODEL } from "./agents";
 
 export type HAction =
   | { tool: "selectSymbol"; symbol: string }
@@ -155,27 +155,50 @@ export async function runHorizon(userText: string, ctx: HorizonCtx, history: HMs
     opts.onText?.(visibleText(raw));
   };
 
-  if (binding.free || !binding.key || !binding.key.trim()) {
+  // Free Mode via our server proxy — the safety net that ALWAYS works (no user key needed).
+  const callFree = async () => {
     const res = await fetch("/api/alpha/free", {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: binding.model || FREE_MODEL, max_tokens: 3000, stream: true, messages: [{ role: "system", content: system }, ...prior, { role: "user", content: user }] }),
+      body: JSON.stringify({ model: FREE_MODEL, max_tokens: 3000, stream: true, messages: [{ role: "system", content: system }, ...prior, { role: "user", content: user }] }),
     });
     if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e?.error || `free mode ${res.status}`); }
     await streamSSE(res, onDelta);
-  } else if (binding.provider === "anthropic") {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST", headers: { "content-type": "application/json", "x-api-key": binding.key.trim(), "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
-      body: JSON.stringify({ model: binding.model || MODEL_FALLBACK.anthropic, max_tokens: 3000, stream: true, system, messages: [...prior, { role: "user", content: user }] }),
-    });
-    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e?.error?.message || `anthropic ${res.status}`); }
-    await streamSSE(res, onDelta);
+  };
+
+  const key = binding.key?.trim();
+  const useProvider = !binding.free && !!key;
+  if (useProvider) {
+    try {
+      if (binding.provider === "anthropic") {
+        const res = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST", headers: { "content-type": "application/json", "x-api-key": key!, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+          body: JSON.stringify({ model: binding.model || MODEL_FALLBACK.anthropic, max_tokens: 3000, stream: true, system, messages: [...prior, { role: "user", content: user }] }),
+        });
+        if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e?.error?.message || `anthropic ${res.status}`); }
+        await streamSSE(res, onDelta);
+      } else {
+        const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+          method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${key!}`, "http-referer": "https://urizenfund.com", "x-title": "URIZEN Terminal · Agent" },
+          body: JSON.stringify({ model: binding.model || MODEL_FALLBACK.openrouter, max_tokens: 3000, stream: true, messages: [{ role: "system", content: system }, ...prior, { role: "user", content: user }] }),
+        });
+        if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e?.error?.message || `openrouter ${res.status}`); }
+        await streamSSE(res, onDelta);
+      }
+    } catch (e) {
+      // A bad / stale / blank key must NEVER brick the chat. If the provider rejected auth (and nothing
+      // has streamed yet), drop the offending key and transparently fall back to Free Mode.
+      const msg = (e as Error)?.message || "";
+      const authFail = /401|403|unauthor|missing|auth|api[-\s]?key|credential|forbidden/i.test(msg);
+      if (!raw && authFail) {
+        try { removeProviderKey(binding.provider); } catch { /* noop */ }
+        raw = ""; started = false;
+        await callFree();
+      } else {
+        throw e;
+      }
+    }
   } else {
-    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${binding.key.trim()}`, "http-referer": "https://urizenfund.com", "x-title": "URIZEN Terminal · Agent" },
-      body: JSON.stringify({ model: binding.model || MODEL_FALLBACK.openrouter, max_tokens: 3000, stream: true, messages: [{ role: "system", content: system }, ...prior, { role: "user", content: user }] }),
-    });
-    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e?.error?.message || `openrouter ${res.status}`); }
-    await streamSSE(res, onDelta);
+    await callFree();
   }
   return parse(raw);
 }
