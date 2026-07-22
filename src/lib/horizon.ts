@@ -5,7 +5,7 @@
 // (server proxy /api/alpha/free). JSON-action protocol so it works on any model, including free ones.
 
 import type { Candle, Indicators } from "./quant";
-import { getActiveBinding, removeProviderKey, FREE_MODEL } from "./agents";
+import { getActiveBinding, removeProviderKey, FREE_MODEL, DEFAULT_MODEL } from "./agents";
 
 export type HAction =
   | { tool: "selectSymbol"; symbol: string }
@@ -35,7 +35,6 @@ export type HorizonCtx = {
 };
 export type HMsg = { role: "user" | "assistant"; content: string };
 
-const MODEL_FALLBACK: Record<string, string> = { anthropic: "claude-sonnet-5", openrouter: "anthropic/claude-sonnet-5" };
 
 function systemPrompt(ctx: HorizonCtx): string {
   const p = ctx.persona;
@@ -169,21 +168,15 @@ export async function runHorizon(userText: string, ctx: HorizonCtx, history: HMs
   const useProvider = !binding.free && !!key;
   if (useProvider) {
     try {
-      if (binding.provider === "anthropic") {
-        const res = await fetch("https://api.anthropic.com/v1/messages", {
-          method: "POST", headers: { "content-type": "application/json", "x-api-key": key!, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
-          body: JSON.stringify({ model: binding.model || MODEL_FALLBACK.anthropic, max_tokens: 3000, stream: true, system, messages: [...prior, { role: "user", content: user }] }),
-        });
-        if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e?.error?.message || `anthropic ${res.status}`); }
-        await streamSSE(res, onDelta);
-      } else {
-        const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-          method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${key!}`, "http-referer": "https://urizenfund.com", "x-title": "URIZEN Terminal · Agent" },
-          body: JSON.stringify({ model: binding.model || MODEL_FALLBACK.openrouter, max_tokens: 3000, stream: true, messages: [{ role: "system", content: system }, ...prior, { role: "user", content: user }] }),
-        });
-        if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e?.error?.message || `openrouter ${res.status}`); }
-        await streamSSE(res, onDelta);
-      }
+      // ALL bring-your-own-key traffic goes through our server proxy — the browser can't reach OpenAI
+      // (no CORS) and each provider needs different auth/routing. The proxy forwards the key and streams
+      // back; it never stores it. Works for OpenAI, Anthropic, and OpenRouter (→ every other lab).
+      const res = await fetch("/api/alpha/chat", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider: binding.provider, key, model: binding.model || DEFAULT_MODEL[binding.provider], system, messages: [...prior, { role: "user", content: user }] }),
+      });
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e?.error || `chat ${res.status}`); }
+      await streamSSE(res, onDelta);
     } catch (e) {
       // A bad / stale / blank key must NEVER brick the chat. If the provider rejected auth (and nothing
       // has streamed yet), drop the offending key and transparently fall back to Free Mode.
