@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { PerpTicket } from "@/components/terminal/perp-ticket";
 
 // Lighter perpetuals — a live central-limit order book (crypto/index perps) as a derivatives
 // market-context panel. Polls our server proxy every ~3s and renders a real depth ladder with
@@ -71,6 +72,10 @@ export function PerpsPanel() {
           ))}
         </div>
       )}
+
+      {/* the trade ticket — long/short, leverage, market/limit, live preview off the mark */}
+      <PerpTicket symbol={market.sym} mark={book?.mark ?? book?.mid ?? null} priceDp={market.pdp}
+        connected={false} onConnect={() => window.open("https://app.lighter.xyz", "_blank", "noopener")} />
 
       {err ? (
         <div className="grid flex-1 place-items-center px-4 text-center font-mono text-[0.66rem] uppercase tracking-widest text-muted-foreground/50">order book unavailable</div>
