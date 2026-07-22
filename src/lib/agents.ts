@@ -243,9 +243,10 @@ export const DEFAULT_MODEL: Record<Provider, string> = {
 /** The binding the agent should use right now. A user key wins; otherwise Urizen Free Mode. */
 export function getActiveBinding(): KeyBinding | null {
   const v = readVault();
-  // a key only counts if it's actually non-blank — a whitespace/stale key must NOT be treated as real,
-  // or we'd call the provider with an empty `Bearer` and get "Missing Authentication header". Fall to free.
-  const has = (x: Provider) => ((v.keys[x] ?? "").trim().length > 0);
+  // a key only counts if it's a plausible, non-blank secret — a whitespace/stale/garbage key must NOT
+  // be treated as real, or we'd call the provider with an empty/bad `Bearer` and get
+  // "Missing Authentication header". Real provider keys are long; anything <20 chars → fall to free.
+  const has = (x: Provider) => ((v.keys[x] ?? "").trim().length >= 20);
   const p = v.active && has(v.active) ? v.active : (Object.keys(v.keys) as Provider[]).find(has);
   if (p) return { provider: p, key: (v.keys[p] as string).trim(), model: v.model };
   // no user key → free mode (our server key + a free model)
