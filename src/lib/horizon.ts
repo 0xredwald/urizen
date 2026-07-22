@@ -155,7 +155,7 @@ export async function runHorizon(userText: string, ctx: HorizonCtx, history: HMs
     opts.onText?.(visibleText(raw));
   };
 
-  if (binding.free || !binding.key) {
+  if (binding.free || !binding.key || !binding.key.trim()) {
     const res = await fetch("/api/alpha/free", {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ model: binding.model || FREE_MODEL, max_tokens: 3000, stream: true, messages: [{ role: "system", content: system }, ...prior, { role: "user", content: user }] }),
